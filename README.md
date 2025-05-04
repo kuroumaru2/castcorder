@@ -28,7 +28,6 @@
   - Requires sufficient disk space (minimum 100 MB free).
 
 ## Install dependencies:
-    ```bash
     pip install streamlink requests beautifulsoup4 psutil tqdm
 Install streamlink and ffmpeg via your package manager (e.g., apt, brew, or download binaries).
 
