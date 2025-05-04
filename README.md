@@ -55,28 +55,34 @@ If [username] is provided, it will attempt to record that streamer (must be in s
 If no username is provided, the script will prompt you to select a streamer from streamers.txt.
 
 ## Configuration
-  Quality: Defaults to best. Modify the QUALITY variable in the script to change stream quality (e.g., 720p, audio_only).
-  Save Folder: Recordings are saved to a subfolder named after the streamer (e.g., ./streamer_name/).
-  Check Interval: The script checks for live streams every 15 seconds (CHECK_INTERVAL).
-  Retry Delay: After a recording attempt, the script waits 15 seconds before retrying (RETRY_DELAY).
+ 1. Quality: 
+  Defaults to best. Modify the QUALITY variable in the script to change stream quality (e.g., 720p, audio_only).
+ 2. Save Folder: 
+  Recordings are saved to a subfolder named after the streamer (e.g., ./streamer_name/).
+ 3. Check Interval: 
+  The script checks for live streams every 15 seconds (CHECK_INTERVAL).
+ 4. Retry Delay:
+  After a recording attempt, the script waits 15 seconds before retrying (RETRY_DELAY).
 
 ## The script will:
-  Check if example_streamer is live.
-  Record the stream to an MP4 file with a filename like [YYYYMMDD] Stream Title [example_streamer][stream_id].mp4.
-  Convert the recording to MKV with metadata and an optional thumbnail.
-  Save the recording to ./example_streamer/.
-  Notes
-  Ensure streamers.txt exists and contains valid TwitCasting usernames.
-  Private streams require PRIVATE_STREAM_PASSWORD to be set.
-  Authentication cookies (TWITCASTING_COOKIES) or login credentials (TWITCASTING_USERNAME and TWITCASTING_PASSWORD) may be needed for protected streams.
-  The script logs activity to both the console and a file in the streamer's save folder (e.g., ./streamer_name/streamer_name_twitcasting_recorder.log).
+1. Check if example_streamer is live.
+2. Record the stream to an MP4 file with a filename like [YYYYMMDD] Stream Title [example_streamer][stream_id].mp4.
+3. Convert the recording to MKV with metadata and an optional thumbnail.
+4. Save the recording to ./example_streamer/.
+ 
+## Notes:
+1. Ensure streamers.txt exists and contains valid TwitCasting usernames.
+2. Private streams require PRIVATE_STREAM_PASSWORD to be set.
+3. Authentication cookies (TWITCASTING_COOKIES) or login credentials (TWITCASTING_USERNAME and TWITCASTING_PASSWORD) may be needed for protected streams.
+4. The script logs activity to both the console and a file in the streamer's save folder (e.g., ./streamer_name/streamer_name_twitcasting_recorder.log).
 
 ## Troubleshooting
-  "tqdm not installed": Install it with pip install tqdm for progress bars.
-  "Streamlink check failed": Ensure Streamlink is installed (pip install streamlink) and FFmpeg is in your system PATH.
-  "Recording file is empty": Check if the stream is live and accessible. Verify authentication settings.
-  Shadowing files: Ensure no files like requests.py or bs4.py exist in the script directory, as they can conflict with Python modules.
-  Contributing
+1. "tqdm not installed": Install it with pip install tqdm for progress bars.
+2. "Streamlink check failed": Ensure Streamlink is installed (pip install streamlink) and FFmpeg is in your system PATH.
+3. "Recording file is empty": Check if the stream is live and accessible. Verify authentication settings.
+4. Shadowing files: Ensure no files like requests.py or bs4.py exist in the script directory, as they can conflict with Python modules.
+
+## Contributing
   Contributions are welcome! Please open an issue or submit a pull request on GitHub.
 
 ## Disclaimer
