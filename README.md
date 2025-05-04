@@ -40,7 +40,7 @@ This project is released into the public domain under the [Unlicense](LICENSE). 
 
 3. On Windows, use set instead of export:
    ```bash
-   set TWITCASTING_USERNAME=your_username
+   set TWITCASTING_USERNAME=your_username"
    set TWITCASTING_PASSWORD="your_password"
    set PRIVATE_STREAM_PASSWORD="stream_password"
    set TWITCASTING_COOKIES="cookie_name1=value1; cookie_name2=value2"
