@@ -17,15 +17,13 @@
 
 ## Requirements:
 1. **Python**: 3.6 or higher
-2. **Dependencies**:
+2. 2. **Dependencies**:
   - `streamlink`: For stream recording.
   - `ffmpeg`: For video conversion and metadata embedding.
   - `requests` and `beautifulsoup4`: For fetching stream info and thumbnails.
   - `psutil` (optional): Enhanced process management.
   - `tqdm` (optional): Progress bar display.
-3. `requests_lib` and `bs4_lib` were in the same folder as the `castcorder.py` is just (optional).
-   because if you have 2 version of Python installed, sometimes the system unable to find it.
-4. **System**:
+3. **System**:
   - Works on Windows, Linux, and macOS.
   - Requires sufficient disk space (minimum 100 MB free).
 
@@ -100,6 +98,8 @@ If --streamer is not provided, the script prompts to select a streamer from this
 4. Use --debug for detailed logs to troubleshoot issues.
 5. The watchdog thread terminates the script if no progress is detected for 1 hour (configurable).
 6. Avoid naming files requests.py or bs4.py in the script directory to prevent module shadowing.
+7. put `requests_lib` and `bs4_lib` in the same folder as the `castcorder.py` (optional)
+8. if you have 2 version of Python installed, sometimes the system unable to find `requests_lib` and `bs4_lib`
 
 ## Limitations:
 1. Requires internet access to fetch stream info and thumbnails.
