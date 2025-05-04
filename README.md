@@ -44,7 +44,7 @@ Create a streamers.txt file with one TwitCasting username per line.
 ## Usage:
 Run the script from the command line:
 
-    python twitcasting_recorder.py [options]
+    python castcorder.py [options]
 
 ## Command-Line Arguments:
 --streamer: Specify a streamer username (e.g., username).
@@ -59,7 +59,7 @@ Run the script from the command line:
 
 Example:
 
-    python twitcasting_recorder.py --streamer username --quality 720p --progress-bar
+    python castcorder.py --streamer username --quality 720p --progress-bar
 
 ## Environment Variables
 TWITCASTING_USERNAME: TwitCasting login username.
