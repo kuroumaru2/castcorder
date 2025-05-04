@@ -40,10 +40,10 @@ This project is released into the public domain under the [Unlicense](LICENSE). 
 
 On Windows, use set instead of export:
     ```cmd
-        set TWITCASTING_USERNAME=your_username
-        set TWITCASTING_PASSWORD="your_password"
-        ser PRIVATE_STREAM_PASSWORD="stream_password"
-        set TWITCASTING_COOKIES="cookie_name1=value1; cookie_name2=value2"
+set TWITCASTING_USERNAME=your_username
+set TWITCASTING_PASSWORD="your_password"
+ser PRIVATE_STREAM_PASSWORD="stream_password"
+set TWITCASTING_COOKIES="cookie_name1=value1; cookie_name2=value2"
 
 Note: Store these in a secure location (e.g., a .env file with python-dotenv or your system's environment variables). Never commit sensitive data to the repository.
 
@@ -59,12 +59,12 @@ If no username is provided, the script will prompt you to select a streamer from
   Check Interval: The script checks for live streams every 15 seconds (CHECK_INTERVAL).
   Retry Delay: After a recording attempt, the script waits 15 seconds before retrying (RETRY_DELAY).
 
-  Example
+## Example
   To record a stream from example_streamer:
   bash
   python castcorder.py example_streamer
 
-The script will:
+## The script will:
   Check if example_streamer is live.
   Record the stream to an MP4 file with a filename like [YYYYMMDD] Stream Title [example_streamer][stream_id].mp4.
   Convert the recording to MKV with metadata and an optional thumbnail.
@@ -75,7 +75,7 @@ The script will:
   Authentication cookies (TWITCASTING_COOKIES) or login credentials (TWITCASTING_USERNAME and TWITCASTING_PASSWORD) may be needed for protected streams.
   The script logs activity to both the console and a file in the streamer's save folder (e.g., ./streamer_name/streamer_name_twitcasting_recorder.log).
 
-Troubleshooting
+## Troubleshooting
   "tqdm not installed": Install it with pip install tqdm for progress bars.
   "Streamlink check failed": Ensure Streamlink is installed (pip install streamlink) and FFmpeg is in your system PATH.
   "Recording file is empty": Check if the stream is live and accessible. Verify authentication settings.
@@ -83,7 +83,7 @@ Troubleshooting
   Contributing
   Contributions are welcome! Please open an issue or submit a pull request on GitHub.
 
-Disclaimer
+## Disclaimer
   This script is provided for personal use. Ensure you comply with TwitCasting's terms of service and applicable laws when recording streams. The authors are not responsible for misuse of this software.
 
 
