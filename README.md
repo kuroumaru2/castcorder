@@ -33,24 +33,23 @@ This project is released into the public domain under the [Unlicense](LICENSE). 
  1. Create a streamers.txt file in the project directory and add one TwitCasting username per line (e.g., streamer1, streamer2).
 	(Optional) Set environment variables for authentication:
     ```bash
-        export TWITCASTING_USERNAME="your_username"
-        export TWITCASTING_PASSWORD="your_password"
-        export PRIVATE_STREAM_PASSWORD="stream_password"
-        export TWITCASTING_COOKIES="cookie_name1=value1; cookie_name2=value2"
+    export TWITCASTING_USERNAME="your_username"
+    export TWITCASTING_PASSWORD="your_password"
+    export PRIVATE_STREAM_PASSWORD="stream_password"
+    export TWITCASTING_COOKIES="cookie_name1=value1; cookie_name2=value2"
 
-2. On Windows, use set instead of export:
+3. On Windows, use set instead of export:
    ```bash
    set TWITCASTING_USERNAME=your_username
    set TWITCASTING_PASSWORD="your_password"
-   ser PRIVATE_STREAM_PASSWORD="stream_password"
+   set PRIVATE_STREAM_PASSWORD="stream_password"
    set TWITCASTING_COOKIES="cookie_name1=value1; cookie_name2=value2"
 
 Note: Store these in a secure location (e.g., a .env file with python-dotenv or your system's environment variables). Never commit sensitive data to the repository.
 
 
 ## Run the script:
-    ```bash
-	python castcorder.py [username]
+    python castcorder.py [username]
 
 If [username] is provided, it will attempt to record that streamer (must be in streamers.txt).
 If no username is provided, the script will prompt you to select a streamer from streamers.txt.
@@ -60,11 +59,6 @@ If no username is provided, the script will prompt you to select a streamer from
   Save Folder: Recordings are saved to a subfolder named after the streamer (e.g., ./streamer_name/).
   Check Interval: The script checks for live streams every 15 seconds (CHECK_INTERVAL).
   Retry Delay: After a recording attempt, the script waits 15 seconds before retrying (RETRY_DELAY).
-
-## Example
-  To record a stream from example_streamer:
-              ```bash
-    		python castcorder.py example_streamer
 
 ## The script will:
   Check if example_streamer is live.
