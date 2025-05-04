@@ -1,91 +1,125 @@
 # Castcorder
 
-**Castcorder** is a Python script designed to record live streams from [TwitCasting](https://twitcasting.tv/). It monitors specified streamers, records their live streams using [Streamlink](https://streamlink.github.io/), converts recordings to MKV format, and adds metadata. The script supports private streams with passwords and handles authentication via cookies.
+**Castcorder** is a Python script designed to record live streams from [TwitCasting](https://twitcasting.tv/). It monitors specified streamers, records their live streams using [Streamlink](https://streamlink.github.io/), converts recordings to MKV format, and adds metadata. The script supports automatic retry, progress monitoring, graceful termination, private streams with passwords and handles authentication via cookies.
 
-## Features
-- Monitor and record live streams from TwitCasting.
-- Support for private streams with password authentication.
-- Automatic conversion of recordings to MKV format.
-- Metadata embedding (title, streamer name, timestamp, etc.).
-- Thumbnail downloading and embedding (when available).
-- Progress monitoring with optional progress bars (via `tqdm`).
-- Robust error handling and logging.
+## Features:
+- Records TwitCasting streams using `streamlink` and converts to MKV with `ffmpeg`.
+- Supports stream quality selection (e.g., "best", "720p").
+- Automatically checks for live streams and retries if offline.
+- Generates safe filenames with stream title, date, and stream ID.
+- Downloads and attaches stream thumbnails (if available).
+- Adds metadata (title, artist, date, comment) to recordings.
+- Monitors disk space and file progress with optional `tqdm` progress bar.
+- Handles private streams with passwords and TwitCasting login credentials.
+- Graceful termination with cleanup on Ctrl+C.
+- Watchdog thread to detect stalled recordings.
+- Unicode-safe logging to file and console.
 
-## License
-This project is released into the public domain under the [Unlicense](LICENSE). See the `LICENSE` file for details.
+## Requirements:
+- **Python**: 3.6 or higher
+- **Dependencies**:
+  - `streamlink`: For stream recording.
+  - `ffmpeg`: For video conversion and metadata embedding.
+  - `requests` and `beautifulsoup4`: For fetching stream info and thumbnails.
+  - `psutil` (optional): Enhanced process management.
+  - `tqdm` (optional): Progress bar display.
+- **System**:
+  - Works on Windows, Linux, and macOS.
+  - Requires sufficient disk space (minimum 100 MB free).
 
-## Requirements
-- Python 3.6 or higher
-- [FFmpeg](https://ffmpeg.org/) (for MKV conversion)
-- Required Python packages:
-  - `streamlink`
-  - `requests`
-  - `beautifulsoup4`
-  - `tqdm` (optional, for progress bars)
-
-## Installation
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/yourusername/castcorder.git
-   cd castcorder
-
-## Usage 
- 1. Create a streamers.txt file in the project directory and add one TwitCasting username per line (e.g., streamer1, streamer2).
-	(Optional) Set environment variables for authentication:
+## Install dependencies:
     ```bash
+    pip install streamlink requests beautifulsoup4 psutil tqdm
+Install streamlink and ffmpeg via your package manager (e.g., apt, brew, or download binaries).
+
+## Installation:
+Clone or download this repository.
+Ensure streamlink and ffmpeg are installed and accessible in your PATH.
+Install Python dependencies:
+
+    pip install -r requirements.txt
+
+(Create requirements.txt with requests, beautifulsoup4, psutil, tqdm if needed.)
+Create a streamers.txt file with one TwitCasting username per line.
+
+## Usage:
+Run the script from the command line:
+
+    python twitcasting_recorder.py [options]
+
+## Command-Line Arguments:
+--streamer: Specify a streamer username (e.g., username).
+--quality: Stream quality (default: best).
+--save-folder: Base folder for recordings (default: script directory).
+--streamers-file: Path to streamers.txt (default: streamers.txt).
+--debug: Enable debug logging.
+--progress-bar: Enable tqdm progress bar (may not work in CMD).
+--timeout: Streamlink timeout in seconds (default: 1800).
+--fast-exit: Force instant exit on Ctrl+C (skips cleanup).
+--no-watchdog: Disable watchdog thread (for testing).
+
+Example:
+
+    python twitcasting_recorder.py --streamer username --quality 720p --progress-bar
+
+## Environment Variables
+TWITCASTING_USERNAME: TwitCasting login username.
+TWITCASTING_PASSWORD: TwitCasting login password.
+PRIVATE_STREAM_PASSWORD: Password for private streams.
+TWITCASTING_COOKIES: Cookies for authenticated sessions.
+CHECK_INTERVAL: Stream check interval in seconds (default: 15).
+RETRY_DELAY: Delay between retries in seconds (default: 15).
+STREAMLINK_TIMEOUT: Streamlink output timeout in seconds (default: 1800).
+
+Example:
+
     export TWITCASTING_USERNAME="your_username"
     export TWITCASTING_PASSWORD="your_password"
-    export PRIVATE_STREAM_PASSWORD="stream_password"
-    export TWITCASTING_COOKIES="cookie_name1=value1; cookie_name2=value2"
+    python twitcasting_recorder.py
 
-3. On Windows, use set instead of export:
-   ```bash
-   set TWITCASTING_USERNAME=your_username"
-   set TWITCASTING_PASSWORD="your_password"
-   set PRIVATE_STREAM_PASSWORD="stream_password"
-   set TWITCASTING_COOKIES="cookie_name1=value1; cookie_name2=value2"
+## Streamers File:
+Create a streamers.txt file in the script directory with one username per line:
+    
+     streamer1
+     streamer2
+     streamer3
 
-Note: Store these in a secure location (e.g., a .env file with python-dotenv or your system's environment variables). Never commit sensitive data to the repository.
+If --streamer is not provided, the script prompts to select a streamer from this list.
 
+##Output:
+1. Recordings are saved in [save_folder]/[streamer_name]/ as MKV files.
+2. Filename format: [<date>] <title> [<username>][<stream_id>].mkv
+3. Log file: [save_folder]/[streamer_name]/[streamer_name]_twitcasting_recorder.log
+4. Temporary files (e.g., MP4, thumbnails) are cleaned up after conversion.
 
-## Run the script:
-    python castcorder.py [username]
-
-If [username] is provided, it will attempt to record that streamer (must be in streamers.txt).
-If no username is provided, the script will prompt you to select a streamer from streamers.txt.
-
-## Configuration
- 1. Quality: 
-  Defaults to best. Modify the QUALITY variable in the script to change stream quality (e.g., 720p, audio_only).
- 2. Save Folder: 
-  Recordings are saved to a subfolder named after the streamer (e.g., ./streamer_name/).
- 3. Check Interval: 
-  The script checks for live streams every 15 seconds (CHECK_INTERVAL).
- 4. Retry Delay:
-  After a recording attempt, the script waits 15 seconds before retrying (RETRY_DELAY).
-
-## The script will:
-1. Check if example_streamer is live.
-2. Record the stream to an MP4 file with a filename like [YYYYMMDD] Stream Title [example_streamer][stream_id].mp4.
-3. Convert the recording to MKV with metadata and an optional thumbnail.
-4. Save the recording to ./example_streamer/.
- 
 ## Notes:
-1. Ensure streamers.txt exists and contains valid TwitCasting usernames.
-2. Private streams require PRIVATE_STREAM_PASSWORD to be set.
-3. Authentication cookies (TWITCASTING_COOKIES) or login credentials (TWITCASTING_USERNAME and TWITCASTING_PASSWORD) may be needed for protected streams.
-4. The script logs activity to both the console and a file in the streamer's save folder (e.g., ./streamer_name/streamer_name_twitcasting_recorder.log).
+1. Ensure streamers.txt exists and is not empty.
+2. The script checks for streamlink and ffmpeg at startup and exits if missing.
+3. Progress bars may not display correctly in Windows CMD; use PowerShell or --progress-bar.
+4. Use --debug for detailed logs to troubleshoot issues.
+5. The watchdog thread terminates the script if no progress is detected for 1 hour (configurable).
+6. Avoid naming files requests.py or bs4.py in the script directory to prevent module shadowing.
 
-## Troubleshooting
-1. "tqdm not installed": Install it with pip install tqdm for progress bars.
-2. "Streamlink check failed": Ensure Streamlink is installed (pip install streamlink) and FFmpeg is in your system PATH.
-3. "Recording file is empty": Check if the stream is live and accessible. Verify authentication settings.
-4. Shadowing files: Ensure no files like requests.py or bs4.py exist in the script directory, as they can conflict with Python modules.
+## Limitations:
+1. Requires internet access to fetch stream info and thumbnails.
+2. Private streams require valid credentials or cookies.
+3. Progress bar requires tqdm and a compatible terminal.
+4. Login may fail if CAPTCHA is required.
 
-## Contributing
-  Contributions are welcome! Please open an issue or submit a pull request on GitHub.
+## Troubleshooting:
+1. "Streamlink not installed": Install streamlink and ensure it's in PATH.
+2. "FFmpeg not installed": Install ffmpeg and ensure it's in PATH.
+3. "Stream offline": The stream is not live; the script will retry.
+4. "Insufficient disk space": Free up space in the save folder.
+5. "Login failed": Check TWITCASTING_USERNAME and TWITCASTING_PASSWORD.
+6. Progress bar issues: Disable with --progress-bar or use a different terminal.
 
-## Disclaimer
-  This script is provided for personal use. Ensure you comply with TwitCasting's terms of service and applicable laws when recording streams. The authors are not responsible for misuse of this software.
+## License:
+This project is licensed under the MIT License. See LICENSE for details.
 
+## Contributing:
+Contributions are welcome! Submit issues or pull requests on GitHub.
 
+## Acknowledgments:
+Built with streamlink, ffmpeg, requests, beautifulsoup4, psutil, and tqdm.
+Inspired by the need to archive TwitCasting streams reliably.
