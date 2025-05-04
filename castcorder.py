@@ -112,7 +112,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Log script version and Python version
-SCRIPT_VERSION = "2025.05.04"
+SCRIPT_VERSION = "2025-05-04-v22"
 logger.info(f"Running script version: {SCRIPT_VERSION}")
 logger.info(f"Python version: {sys.version}")
 
@@ -170,6 +170,7 @@ except ImportError as e:
 # Configuration (continued)
 CHECK_INTERVAL = 15
 RETRY_DELAY = 15
+STREAMLINK_TIMEOUT = 300  # Increased from 60 to 300 seconds
 
 # TwitCasting login credentials and cookies
 TWITCASTING_USERNAME = os.environ.get('TWITCASTING_USERNAME')
@@ -279,6 +280,86 @@ def is_stream_live():
         logger.error(f"Page scrape live check failed: {e}")
         return False
 
+def fetch_stream_info():
+    """Fetch stream title, stream ID, and thumbnail URL."""
+    title = None
+    stream_id = None
+    thumbnail_url = None
+
+    if not requests or not BeautifulSoup:
+        logger.warning("Cannot fetch stream info: requests or BeautifulSoup module is not available")
+        title = f"{streamer_name}'s TwitCasting Stream"
+        stream_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return title, stream_id, thumbnail_url
+
+    try:
+        headers = {'User-Agent': DEFAULT_USER_AGENT}
+        if TWITCASTING_COOKIES:
+            headers['Cookie'] = TWITCASTING_COOKIES
+        response = requests.get(STREAMER_URL, headers=headers, timeout=10)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        # Extract title
+        og_title = soup.find("meta", property="og:title") or soup.find("meta", attrs={"name": "twitter:title"})
+        if og_title and og_title.get("content"):
+            title = og_title["content"].strip()
+            logger.info(f"Found title: {title}")
+
+        # Extract stream ID from movie link
+        movie_link = soup.find("a", href=re.compile(r'/movie/\d+'))
+        if movie_link and movie_link.get("href"):
+            stream_id_match = re.search(r'/movie/(\d+)', movie_link["href"])
+            if stream_id_match:
+                stream_id = stream_id_match.group(1)
+                movie_url = f"{STREAMER_URL}/movie/{stream_id}"
+                logger.info(f"Found stream ID: {stream_id}, Movie URL: {movie_url}")
+        else:
+            logger.debug("No movie link found on main page, checking alternative selectors")
+
+        # Try alternative selectors for stream ID
+        if not stream_id:
+            # Check meta tags or other links
+            meta_movie = soup.find("meta", attrs={"content": re.compile(r'/movie/\d+')})
+            if meta_movie:
+                stream_id_match = re.search(r'/movie/(\d+)', meta_movie["content"])
+                if stream_id_match:
+                    stream_id = stream_id_match.group(1)
+                    logger.info(f"Found stream ID from meta tag: {stream_id}")
+
+        # Fallback: Check the movie page if stream is live
+        if not stream_id and is_stream_live():
+            movie_url = f"{STREAMER_URL}/movie"
+            try:
+                response = requests.get(movie_url, headers=headers, timeout=10)
+                response.raise_for_status()
+                soup = BeautifulSoup(response.text, "html.parser")
+                movie_link = soup.find("a", href=re.compile(r'/movie/\d+'))
+                if movie_link:
+                    stream_id_match = re.search(r'/movie/(\d+)', movie_link["href"])
+                    if stream_id_match:
+                        stream_id = stream_id_match.group(1)
+                        logger.info(f"Found stream ID from movie page: {stream_id}")
+            except Exception as e:
+                logger.debug(f"Failed to fetch movie page for stream ID: {e}")
+
+        # Extract thumbnail URL
+        og_image = soup.find("meta", property="og:image") or soup.find("meta", attrs={"name": "twitter:image"})
+        if og_image and og_image.get("content"):
+            thumbnail_url = og_image["content"]
+            logger.info(f"Found thumbnail URL: {thumbnail_url}")
+
+    except Exception as e:
+        logger.warning(f"Failed to fetch stream info from page: {e}")
+
+    if not title:
+        title = f"{streamer_name}'s TwitCasting Stream"
+    if not stream_id:
+        stream_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        logger.warning("Using timestamp as fallback stream ID")
+
+    return title, stream_id, thumbnail_url
+
 def get_filename(title, stream_id, is_mkv=False):
     """Generate a unique filename with format [YYYYMMDD] title [username][stream_id] [(n)]."""
     date_str = datetime.now().strftime("%Y%m%d")
@@ -301,55 +382,6 @@ def get_filename(title, stream_id, is_mkv=False):
     if counter > 2:
         logger.info(f"Using numbered filename: {filename}")
     return full_path
-
-def fetch_stream_info():
-    """Fetch stream title, stream ID, and thumbnail URL."""
-    title = None
-    stream_id = None
-    thumbnail_url = None
-
-    if not requests or not BeautifulSoup:
-        logger.warning("Cannot fetch stream info: requests or BeautifulSoup module is not available")
-        title = f"{streamer_name}'s TwitCasting Stream"
-        stream_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return title, stream_id, thumbnail_url
-
-    try:
-        headers = {'User-Agent': DEFAULT_USER_AGENT}
-        if TWITCASTING_COOKIES:
-            headers['Cookie'] = TWITCASTING_COOKIES
-        response = requests.get(STREAMER_URL, headers=headers, timeout=10)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, "html.parser")
-
-        og_title = soup.find("meta", property="og:title") or soup.find("meta", attrs={"name": "twitter:title"})
-        if og_title and og_title.get("content"):
-            title = og_title["content"].strip()
-            logger.info(f"Found title: {title}")
-
-        movie_link = soup.find("a", href=re.compile(r'/movie/\d+'))
-        if movie_link and movie_link.get("href"):
-            stream_id_match = re.search(r'/movie/(\d+)', movie_link["href"])
-            if stream_id_match:
-                stream_id = stream_id_match.group(1)
-                movie_url = f"{STREAMER_URL}/movie/{stream_id}"
-                logger.info(f"Found stream ID: {stream_id}, Movie URL: {movie_url}")
-
-        og_image = soup.find("meta", property="og:image") or soup.find("meta", attrs={"name": "twitter:image"})
-        if og_image and og_image.get("content"):
-            thumbnail_url = og_image["content"]
-            logger.info(f"Found thumbnail URL: {thumbnail_url}")
-
-    except Exception as e:
-        logger.warning(f"Failed to fetch stream info from page: {e}")
-
-    if not title:
-        title = f"{streamer_name}'s TwitCasting Stream"
-    if not stream_id:
-        stream_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-        logger.warning("Using timestamp as fallback stream ID")
-
-    return title, stream_id, thumbnail_url
 
 def download_thumbnail(thumbnail_url):
     """Download the thumbnail image to a temporary file."""
@@ -411,7 +443,6 @@ def monitor_file_progress(file_path, start_time, stop_event, progress_callback):
     try:
         if tqdm is not None and not terminating:
             with tqdm_lock:
-                # Initialize tqdm with settings to mimic streamlink
                 progress_bar = tqdm(
                     desc="Recording",
                     unit="it",
@@ -458,7 +489,6 @@ def monitor_file_progress(file_path, start_time, stop_event, progress_callback):
 def print_progress(progress, counter, progress_bar, tqdm_lock):
     """Update progress display in place using tqdm."""
     global terminating
-    # Log progress to file only, not console, to avoid new lines
     logger.debug(progress)
     if progress_bar is not None and not terminating:
         with tqdm_lock:
@@ -469,7 +499,6 @@ def print_progress(progress, counter, progress_bar, tqdm_lock):
             except Exception as e:
                 logger.debug(f"Error updating progress bar: {e}")
     elif tqdm is None:
-        # Fallback for no tqdm: in-place console update
         sys.stdout.write(f"\r{progress:<100}")
         sys.stdout.flush()
 
@@ -614,7 +643,7 @@ def record_stream():
 
                 stderr_lines = []
                 stdout_lines = []
-                timeout = 60
+                timeout = STREAMLINK_TIMEOUT  # Use configurable timeout
                 start_time = time.time()
                 while process.poll() is None and not terminating:
                     try:
