@@ -39,17 +39,19 @@ This project is released into the public domain under the [Unlicense](LICENSE). 
         export TWITCASTING_COOKIES="cookie_name1=value1; cookie_name2=value2"
 
 2. On Windows, use set instead of export:
-```cmd
-set TWITCASTING_USERNAME=your_username
-set TWITCASTING_PASSWORD="your_password"
-ser PRIVATE_STREAM_PASSWORD="stream_password"
-set TWITCASTING_COOKIES="cookie_name1=value1; cookie_name2=value2"
+   ```bash
+   set TWITCASTING_USERNAME=your_username
+   set TWITCASTING_PASSWORD="your_password"
+   ser PRIVATE_STREAM_PASSWORD="stream_password"
+   set TWITCASTING_COOKIES="cookie_name1=value1; cookie_name2=value2"
 
 Note: Store these in a secure location (e.g., a .env file with python-dotenv or your system's environment variables). Never commit sensitive data to the repository.
 
+
 ## Run the script:
-bash
-python castcorder.py [username]
+    ```bash
+	python castcorder.py [username]
+
 If [username] is provided, it will attempt to record that streamer (must be in streamers.txt).
 If no username is provided, the script will prompt you to select a streamer from streamers.txt.
 
@@ -61,8 +63,8 @@ If no username is provided, the script will prompt you to select a streamer from
 
 ## Example
   To record a stream from example_streamer:
-  bash
-  python castcorder.py example_streamer
+              ```bash
+    		python castcorder.py example_streamer
 
 ## The script will:
   Check if example_streamer is live.
