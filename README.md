@@ -38,8 +38,8 @@ This project is released into the public domain under the [Unlicense](LICENSE). 
         export PRIVATE_STREAM_PASSWORD="stream_password"
         export TWITCASTING_COOKIES="cookie_name1=value1; cookie_name2=value2"
 
-On Windows, use set instead of export:
-    ```cmd
+2. On Windows, use set instead of export:
+```cmd
 set TWITCASTING_USERNAME=your_username
 set TWITCASTING_PASSWORD="your_password"
 ser PRIVATE_STREAM_PASSWORD="stream_password"
