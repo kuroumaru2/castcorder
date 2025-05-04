@@ -23,6 +23,9 @@
   - `requests` and `beautifulsoup4`: For fetching stream info and thumbnails.
   - `psutil` (optional): Enhanced process management.
   - `tqdm` (optional): Progress bar display.
+  note:
+`requests_lib` and `bs4_lib` were in the same folder as the `castcorder.py` is just (optional).
+ because if you have 2 version of Python installed, sometimes the system unable to find it.
 3. **System**:
   - Works on Windows, Linux, and macOS.
   - Requires sufficient disk space (minimum 100 MB free).
