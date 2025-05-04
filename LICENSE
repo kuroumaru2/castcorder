@@ -1,3 +1,9 @@
+- **Notes**:
+  - The `README.md` includes a warning about sensitive data in logs.
+  - It clarifies the optional dependencies and missing functions.
+  - It provides clear setup and usage instructions.
+  - Replace `<your-username>` with your GitHub username when creating the repository.
+
 This is free and unencumbered software released into the public domain.
 
 Anyone is free to copy, modify, publish, use, compile, sell, or
@@ -22,3 +28,4 @@ ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 OTHER DEALINGS IN THE SOFTWARE.
 
 For more information, please refer to <https://unlicense.org>
+

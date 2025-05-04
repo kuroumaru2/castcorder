@@ -1,0 +1,34 @@
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Log files
+*.log
+
+# Streamers file
+streamers.txt
+
+# Recorded streams
+*.mp4
+*.mkv
+
+# Thumbnails and temporary files
+*.jpg
+*.jpeg
+*.png
+*.temp
+*.tmp
+
+# Environment variables
+.env
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS metadata
+.DS_Store
