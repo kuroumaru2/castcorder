@@ -47,15 +47,15 @@ Run the script from the command line:
     python castcorder.py [options]
 
 ## Command-Line Arguments:
---streamer: Specify a streamer username (e.g., username).
---quality: Stream quality (default: best).
---save-folder: Base folder for recordings (default: script directory).
---streamers-file: Path to streamers.txt (default: streamers.txt).
---debug: Enable debug logging.
---progress-bar: Enable tqdm progress bar (may not work in CMD).
---timeout: Streamlink timeout in seconds (default: 1800).
---fast-exit: Force instant exit on Ctrl+C (skips cleanup).
---no-watchdog: Disable watchdog thread (for testing).
+- --streamer: Specify a streamer username (e.g., username).
+- --quality: Stream quality (default: best).
+- --save-folder: Base folder for recordings (default: script directory).
+- --streamers-file: Path to streamers.txt (default: streamers.txt).
+- --debug: Enable debug logging.
+- --progress-bar: Enable tqdm progress bar (may not work in CMD).
+- --timeout: Streamlink timeout in seconds (default: 1800).
+- --fast-exit: Force instant exit on Ctrl+C (skips cleanup).
+- --no-watchdog: Disable watchdog thread (for testing).
 
 Example:
 
