@@ -3,27 +3,27 @@
 **Castcorder** is a Python script designed to record live streams from [TwitCasting](https://twitcasting.tv/). It monitors specified streamers, records their live streams using [Streamlink](https://streamlink.github.io/), converts recordings to MKV format, and adds metadata. The script supports automatic retry, progress monitoring, graceful termination, private streams with passwords and handles authentication via cookies.
 
 ## Features:
-- Records TwitCasting streams using `streamlink` and converts to MKV with `ffmpeg`.
-- Supports stream quality selection (e.g., "best", "720p").
-- Automatically checks for live streams and retries if offline.
-- Generates safe filenames with stream title, date, and stream ID.
-- Downloads and attaches stream thumbnails (if available).
-- Adds metadata (title, artist, date, comment) to recordings.
-- Monitors disk space and file progress with optional `tqdm` progress bar.
-- Handles private streams with passwords and TwitCasting login credentials.
-- Graceful termination with cleanup on Ctrl+C.
-- Watchdog thread to detect stalled recordings.
-- Unicode-safe logging to file and console.
+1. Records TwitCasting streams using `streamlink` and converts to MKV with `ffmpeg`.
+2. Supports stream quality selection (e.g., "best", "720p").
+3. Automatically checks for live streams and retries if offline.
+4. Generates safe filenames with stream title, date, and stream ID.
+5. Downloads and attaches stream thumbnails (if available).
+6. Adds metadata (title, artist, date, comment) to recordings.
+7. Monitors disk space and file progress with optional `tqdm` progress bar.
+8. Handles private streams with passwords and TwitCasting login credentials.
+9. Graceful termination with cleanup on Ctrl+C.
+10. Watchdog thread to detect stalled recordings.
+11. Unicode-safe logging to file and console.
 
 ## Requirements:
-- **Python**: 3.6 or higher
-- **Dependencies**:
+1. **Python**: 3.6 or higher
+2. **Dependencies**:
   - `streamlink`: For stream recording.
   - `ffmpeg`: For video conversion and metadata embedding.
   - `requests` and `beautifulsoup4`: For fetching stream info and thumbnails.
   - `psutil` (optional): Enhanced process management.
   - `tqdm` (optional): Progress bar display.
-- **System**:
+3. **System**:
   - Works on Windows, Linux, and macOS.
   - Requires sufficient disk space (minimum 100 MB free).
 
@@ -47,28 +47,28 @@ Run the script from the command line:
     python castcorder.py [options]
 
 ## Command-Line Arguments:
-- --streamer: Specify a streamer username (e.g., username).
-- --quality: Stream quality (default: best).
-- --save-folder: Base folder for recordings (default: script directory).
-- --streamers-file: Path to streamers.txt (default: streamers.txt).
-- --debug: Enable debug logging.
-- --progress-bar: Enable tqdm progress bar (may not work in CMD).
-- --timeout: Streamlink timeout in seconds (default: 1800).
-- --fast-exit: Force instant exit on Ctrl+C (skips cleanup).
-- --no-watchdog: Disable watchdog thread (for testing).
+1. --streamer: Specify a streamer username (e.g., username).
+2. --quality: Stream quality (default: best).
+3. --save-folder: Base folder for recordings (default: script directory).
+4. --streamers-file: Path to streamers.txt (default: streamers.txt).
+5. --debug: Enable debug logging.
+6. --progress-bar: Enable tqdm progress bar (may not work in CMD).
+7. --timeout: Streamlink timeout in seconds (default: 1800).
+8. --fast-exit: Force instant exit on Ctrl+C (skips cleanup).
+9. --no-watchdog: Disable watchdog thread (for testing).
 
 Example:
 
     python castcorder.py --streamer username --quality 720p --progress-bar
 
 ## Environment Variables
-TWITCASTING_USERNAME: TwitCasting login username.
-TWITCASTING_PASSWORD: TwitCasting login password.
-PRIVATE_STREAM_PASSWORD: Password for private streams.
-TWITCASTING_COOKIES: Cookies for authenticated sessions.
-CHECK_INTERVAL: Stream check interval in seconds (default: 15).
-RETRY_DELAY: Delay between retries in seconds (default: 15).
-STREAMLINK_TIMEOUT: Streamlink output timeout in seconds (default: 1800).
+1. TWITCASTING_USERNAME: TwitCasting login username.
+2. TWITCASTING_PASSWORD: TwitCasting login password.
+3. PRIVATE_STREAM_PASSWORD: Password for private streams.
+4. TWITCASTING_COOKIES: Cookies for authenticated sessions.
+5. CHECK_INTERVAL: Stream check interval in seconds (default: 15).
+6. RETRY_DELAY: Delay between retries in seconds (default: 15).
+7. STREAMLINK_TIMEOUT: Streamlink output timeout in seconds (default: 1800).
 
 Example:
 
