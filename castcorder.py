@@ -229,7 +229,7 @@ if __name__ == "__main__":
 
     # Setup streamer-specific paths
     from urllib.parse import quote
-    STREAMER_URL = f"https://twitcasting.tv/{quote(selected_streamer)}"
+    STREAMER_URL = f"https://twitcasting.tv/{selected_streamer}"
     streamer_name = selected_streamer.replace(':', '_')
     SAVE_FOLDER = os.path.join(BASE_SAVE_FOLDER, streamer_name)
     LOG_FILE = os.path.join(SAVE_FOLDER, f"{streamer_name}_twitcasting_recorder.log")
