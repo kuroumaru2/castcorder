@@ -87,7 +87,7 @@ If --streamer is not provided, the script prompts to select a streamer from this
 
 ##Output:
 1. Recordings are saved in [save_folder]/[streamer_name]/ as MKV files.
-2. Filename format: [<date>] <title> [<username>][<stream_id>].mkv
+2. Filename format: `[<date>] <title> [<username>][<stream_id>].mkv`
 3. Log file: [save_folder]/[streamer_name]/[streamer_name]_twitcasting_recorder.log
 4. Temporary files (e.g., MP4, thumbnails) are cleaned up after conversion.
 
