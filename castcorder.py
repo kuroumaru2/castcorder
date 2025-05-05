@@ -223,13 +223,14 @@ if __name__ == "__main__":
     selected_streamer = select_streamer(streamers, args.streamer)
 
     # Validate streamer username
-    if not re.match(r'^[a-zA-Z0-9_]+$', selected_streamer):
-        logger.error(f"Invalid streamer username: {selected_streamer}. Must contain only letters, numbers, or underscores.")
+    if not re.match(r'^[a-zA-Z0-9_:]+$', selected_streamer):
+        logger.error(f"Invalid streamer username: {selected_streamer}. Must contain only letters, numbers, underscores, or colons.")
         sys.exit(1)
 
     # Setup streamer-specific paths
-    STREAMER_URL = f"https://twitcasting.tv/{selected_streamer}"
-    streamer_name = STREAMER_URL.split('/')[-1]
+    from urllib.parse import quote
+    STREAMER_URL = f"https://twitcasting.tv/{quote(selected_streamer)}"
+    streamer_name = selected_streamer.replace(':', '_')
     SAVE_FOLDER = os.path.join(BASE_SAVE_FOLDER, streamer_name)
     LOG_FILE = os.path.join(SAVE_FOLDER, f"{streamer_name}_twitcasting_recorder.log")
 
