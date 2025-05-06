@@ -53,7 +53,7 @@ class UnicodeSafeStreamHandler(logging.StreamHandler):
 
 # StreamRecorder class to encapsulate state
 class StreamRecorder:
-    def __init__(self, streamer_url, save_folder, log_file, quality="best", use_progress_bar=False, timeout=1800):
+    def __init__(self, streamer_url, save_folder, log_file, quality="best", use_progress_bar=False, timeout=25200):
         self.terminating = False
         self.process = None
         self.stop_event = None
@@ -181,7 +181,7 @@ def parse_args():
     parser.add_argument("--streamers-file", default="streamers.txt", help="Path to streamers file")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     parser.add_argument("--progress-bar", action="store_true", help="Enable tqdm progress bar (may not work in all terminals)")
-    parser.add_argument("--timeout", type=int, default=1800, help="Streamlink timeout in seconds (default: 1800)")
+    parser.add_argument("--timeout", type=int, default=25200, help="Streamlink timeout in seconds (default: 25200)")
     parser.add_argument("--fast-exit", action="store_true", help="Force instant exit on Ctrl+C (skips cleanup, may leave temporary files)")
     parser.add_argument("--no-watchdog", action="store_true", help="Disable watchdog thread for testing")
     return parser.parse_args()
@@ -581,12 +581,29 @@ if __name__ == "__main__":
                 return
             logger.debug("Starting cleanup of temporary files")
             try:
+                # Define backup folder
+                backup_folder = os.path.join(recorder.save_folder, "backup")
+                os.makedirs(backup_folder, exist_ok=True)  # Create backup folder if it doesn't exist
+
+                # Handle thumbnail
                 if recorder.current_thumbnail_path and os.path.exists(recorder.current_thumbnail_path):
-                    os.remove(recorder.current_thumbnail_path)
-                    logger.info(f"Deleted thumbnail: {recorder.current_thumbnail_path}")
-                if recorder.current_mp4_file and os.path.exists(recorder.current_mp4_file) and os.path.getsize(recorder.current_mp4_file) == 0:
-                    os.remove(recorder.current_mp4_file)
-                    logger.info(f"Deleted empty MP4: {recorder.current_mp4_file}")
+                    # Optionally move thumbnail to backup instead of deleting
+                    backup_thumbnail_path = os.path.join(backup_folder, os.path.basename(recorder.current_thumbnail_path))
+                    shutil.move(recorder.current_thumbnail_path, backup_thumbnail_path)
+                    logger.info(f"Moved thumbnail to: {backup_thumbnail_path}")
+                    # Alternatively, keep deletion: os.remove(recorder.current_thumbnail_path)
+
+                # Handle MP4 file
+                if recorder.current_mp4_file and os.path.exists(recorder.current_mp4_file):
+                    if os.path.getsize(recorder.current_mp4_file) == 0:
+                        # Delete empty files
+                        os.remove(recorder.current_mp4_file)
+                        logger.info(f"Deleted empty MP4: {recorder.current_mp4_file}")
+                    else:
+                        # Move non-empty partial files to backup
+                        backup_mp4_path = os.path.join(backup_folder, os.path.basename(recorder.current_mp4_file))
+                        shutil.move(recorder.current_mp4_file, backup_mp4_path)
+                        logger.info(f"Moved partial MP4 to: {backup_mp4_path}")
             except Exception as e:
                 logger.error(f"Error cleaning up: {e}")
             recorder.cleaned_up = True
