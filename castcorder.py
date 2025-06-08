@@ -344,7 +344,7 @@ if __name__ == "__main__":
     logger = recorder.setup_logging(debug=args.debug)
 
     # Log script info
-    SCRIPT_VERSION = "v2025.05.05.09"
+    SCRIPT_VERSION = "v2025.06.08"
     logger.info(f"Running script version: {SCRIPT_VERSION}")
     logger.info(f"Python version: {sys.version}")
     logger.info(f"tqdm available: {tqdm is not None}")
