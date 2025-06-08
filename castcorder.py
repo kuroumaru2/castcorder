@@ -198,6 +198,15 @@ def parse_args():
     parser.add_argument("--hls-url", help="HLS URL to record (e.g., https://example.com/stream.m3u8). Overrides automatic fetching.")
     return parser.parse_args()
 
+# Extract stream ID from HLS URL
+def extract_stream_id_from_hls_url(hls_url):
+    """Extract the stream ID from the HLS URL."""
+    match = re.search(r'/streams/(\d+)/', hls_url)
+    if match:
+        return match.group(1)
+    logger.warning(f"Could not extract stream ID from HLS URL: {hls_url}")
+    return None
+
 # Fetch HLS URL using yt-dlp
 def fetch_hls_url(streamer_url, cookies=None):
     """Fetch the HLS URL using yt-dlp."""
@@ -335,7 +344,7 @@ if __name__ == "__main__":
     logger = recorder.setup_logging(debug=args.debug)
 
     # Log script info
-    SCRIPT_VERSION = "v2025.05.05.08"
+    SCRIPT_VERSION = "v2025.05.05.09"
     logger.info(f"Running script version: {SCRIPT_VERSION}")
     logger.info(f"Python version: {sys.version}")
     logger.info(f"tqdm available: {tqdm is not None}")
@@ -881,12 +890,21 @@ if __name__ == "__main__":
 
             # If HLS_URL is provided or fetched, use it; otherwise, use WebSocket logic
             if HLS_URL:
-                title, stream_id, thumbnail_url = fetch_stream_info()
+                # Extract stream ID from HLS URL if possible
+                stream_id = extract_stream_id_from_hls_url(HLS_URL)
+                if stream_id:
+                    logger.debug(f"Extracted stream ID from HLS URL: {stream_id}")
+                else:
+                    logger.warning("Could not extract stream ID from HLS URL, fetching from page")
+                    stream_id = None
+
+                # Fetch title and thumbnail, but use HLS stream ID if available
+                title, _, thumbnail_url = fetch_stream_info()  # Ignore stream_id from page
                 if not title:
                     logger.warning("Missing stream title, using default")
                     title = f"{streamer_name}'s HLS Stream"
                 if not stream_id:
-                    logger.warning("Missing stream ID, generating random ID")
+                    logger.warning("Using random stream ID due to missing ID in HLS URL and page")
                     stream_id = str(random.randint(1000000, 9999999))
                 logger.info(f"Ready to record HLS stream - Title: '{title}', ID: {stream_id}")
                 url = HLS_URL
