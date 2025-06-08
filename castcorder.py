@@ -784,7 +784,7 @@ def record_stream(recorder):
             break
 
         logger.info("Monitoring stream status via Streamlink...")
-        is_live, title, stream_id, thumbnail_url = is_stream_live(recorder, max_retries=10)
+        is_live, title, _, thumbnail_url = is_stream_live(recorder, max_retries=10)
 
         if not is_live:
             msg = f"Stream offline. Checking again in {recorder.check_interval} seconds..."
@@ -794,6 +794,7 @@ def record_stream(recorder):
             time.sleep(recorder.check_interval)
             continue
 
+        # Fetch HLS URL after confirming the stream is live
         if not HLS_URL:
             HLS_URL = fetch_hls_url(recorder.streamer_url, TWITCASTING_COOKIES)
             if not HLS_URL:
@@ -802,14 +803,17 @@ def record_stream(recorder):
                 continue
             logger.info(f"Fetched HLS URL: {HLS_URL}")
 
+        # Extract stream ID from HLS URL
+        stream_id = extract_stream_id_from_hls_url(HLS_URL)
+        if not stream_id:
+            logger.warning("Could not extract stream ID from HLS URL, fetching from stream info...")
+            _, temp_stream_id, _ = fetch_stream_info()
+            stream_id = temp_stream_id if temp_stream_id else str(random.randint(1000000, 9999999))
+            logger.info(f"Using stream ID: {stream_id}")
+
         if not title:
             logger.warning("Missing stream title, using default")
             title = f"{streamer_name}'s TwitCasting Stream"
-        if not stream_id:
-            stream_id = extract_stream_id_from_hls_url(HLS_URL)
-            if not stream_id:
-                logger.warning("Could not extract stream ID, using random ID")
-                stream_id = str(random.randint(1000000, 9999999))
 
         logger.info(f"Ready to record HLS stream - Title: '{title}', ID: {stream_id}")
 
