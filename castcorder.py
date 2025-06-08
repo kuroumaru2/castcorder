@@ -14,6 +14,7 @@ import platform
 import random
 import shutil
 import requests
+import numpy
 from bs4 import BeautifulSoup
 from urllib.parse import quote
 
@@ -291,8 +292,11 @@ def is_stream_live(recorder, max_retries=10):
     original_handlers = logger.handlers[:]
     logger.handlers = [h for h in logger.handlers if not isinstance(h, (logging.StreamHandler, UnicodeSafeStreamHandler))]
     try:
-        sys.stderr.write("\n")
+        # Write initial monitoring message to stderr
+        monitoring_msg = "Monitoring stream status via Streamlink..."
+        sys.stderr.write(f"\r{monitoring_msg.ljust(80)}")
         sys.stderr.flush()
+        logger.info(monitoring_msg)
         attempt = 0
         while not recorder.terminating and attempt < max_retries:
             cmd = [
@@ -350,6 +354,8 @@ def is_stream_live(recorder, max_retries=10):
                                         return (False, None, None, None)
                                 
                                 logger.info(f"Got stream metadata - Title: '{title}', ID: {stream_id}")
+                                sys.stderr.write("\r" + " " * 80 + "\r")  # Clear line
+                                sys.stderr.flush()
                                 return (True, title, stream_id, thumbnail_url)
                             except Exception as e:
                                 logger.error(f"Failed to fetch stream metadata: {e}")
@@ -358,13 +364,15 @@ def is_stream_live(recorder, max_retries=10):
                                     time.sleep(2)
                                 else:
                                     return (False, None, None, None)
+                    sys.stderr.write("\r" + " " * 80 + "\r")  # Clear line
+                    sys.stderr.flush()
                     return (False, None, None, None)
                 else:
                     logger.debug(f"Streamlink check failed: {stdout}")
                     attempt += 1
                     if attempt < max_retries:
                         msg = f"Retrying in {recorder.retry_delay} seconds... (Attempt {attempt + 1}/{max_retries})"
-                        sys.stderr.write(f"\r{msg.ljust(80)}")
+                        sys.stderr.write(f"\r{msg.ljust(80)}")  # Overwrite same line
                         sys.stderr.flush()
                         logger.info(msg)
                         time.sleep(recorder.retry_delay)
@@ -374,7 +382,7 @@ def is_stream_live(recorder, max_retries=10):
                 attempt += 1
                 if attempt < max_retries:
                     msg = f"Retrying in {recorder.retry_delay} seconds... (Attempt {attempt + 1}/{max_retries})"
-                    sys.stderr.write(f"\r{msg.ljust(80)}")
+                    sys.stderr.write(f"\r{msg.ljust(80)}")  # Overwrite same line
                     sys.stderr.flush()
                     logger.info(msg)
                     time.sleep(recorder.retry_delay)
@@ -384,7 +392,7 @@ def is_stream_live(recorder, max_retries=10):
                 attempt += 1
                 if attempt < max_retries:
                     msg = f"Retrying in {recorder.retry_delay} seconds... (Attempt {attempt + 1}/{max_retries})"
-                    sys.stderr.write(f"\r{msg.ljust(80)}")
+                    sys.stderr.write(f"\r{msg.ljust(80)}")  # Overwrite same line
                     sys.stderr.flush()
                     logger.info(msg)
                     time.sleep(recorder.retry_delay)
@@ -396,13 +404,13 @@ def is_stream_live(recorder, max_retries=10):
                     except subprocess.TimeoutExpired:
                         logger.warning("Failed to terminate streamlink process")
         msg = f"Streamlink monitoring failed after {max_retries} retries"
-        sys.stderr.write(f"\r{msg.ljust(80)}\n")
+        sys.stderr.write(f"\r{msg.ljust(80)}")  # Overwrite same line
         sys.stderr.flush()
         logger.info(msg)
         return (False, None, None, None)
     finally:
         logger.handlers = original_handlers
-        sys.stderr.write("\n")
+        sys.stderr.write("\r" + " " * 80 + "\r")  # Clear line
         sys.stderr.flush()
 
 # Fetch stream info
@@ -776,21 +784,16 @@ def watchdog(recorder, timeout=3600):
         if recorder.watchdog_stop_event.wait(timeout=check_interval):
             break
 
-# Record stream
 def record_stream(recorder):
     global HLS_URL
     while True:
         if recorder.terminating:
             break
 
-        logger.info("Monitoring stream status via Streamlink...")
         is_live, title, _, thumbnail_url = is_stream_live(recorder, max_retries=10)
 
         if not is_live:
-            msg = f"Stream offline. Checking again in {recorder.check_interval} seconds..."
-            sys.stderr.write(f"\r{msg.ljust(80)}\n")
-            sys.stderr.flush()
-            logger.info(msg)
+            logger.info(f"Stream offline. Checking again in {recorder.check_interval} seconds...")
             time.sleep(recorder.check_interval)
             continue
 
@@ -798,7 +801,8 @@ def record_stream(recorder):
         if not HLS_URL:
             HLS_URL = fetch_hls_url(recorder.streamer_url, TWITCASTING_COOKIES)
             if not HLS_URL:
-                logger.warning("Failed to fetch HLS URL, retrying Streamlink monitoring...")
+                msg = "Failed to fetch HLS URL, retrying Streamlink monitoring..."
+                logger.warning(msg)
                 time.sleep(recorder.retry_delay)
                 continue
             logger.info(f"Fetched HLS URL: {HLS_URL}")
@@ -815,6 +819,8 @@ def record_stream(recorder):
             logger.warning("Missing stream title, using default")
             title = f"{streamer_name}'s TwitCasting Stream"
 
+        sys.stderr.write("\r" + " " * 80 + "\r")  # Clear line
+        sys.stderr.flush()
         logger.info(f"Ready to record HLS stream - Title: '{title}', ID: {stream_id}")
 
         with recorder.lock:
@@ -878,7 +884,7 @@ def record_stream(recorder):
                     logger.debug(f"Error reading output: {e}")
             recorder.stop_event.set()
             recorder.progress_thread.join(timeout=1.0)
-            sys.stderr.write("\n")
+            sys.stderr.write("\r" + " " * 80 + "\r")  # Clear line
             sys.stderr.flush()
             stdout, stderr = recorder.process.communicate(timeout=5)
             stdout_lines.extend(stdout.splitlines())
