@@ -112,6 +112,17 @@ def check_ffmpeg():
         logger.error(f"Error checking FFmpeg: {e}")
         sys.exit(1)
 
+def check_ytdlp():
+    try:
+        subprocess.run(["yt-dlp", "--version"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        logger.info("yt-dlp is installed and accessible")
+    except FileNotFoundError:
+        logger.error("yt-dlp is not installed or not in PATH. Please install yt-dlp.")
+        sys.exit(1)
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Error checking yt-dlp: {e}")
+        sys.exit(1)
+
 # Read streamers from file
 def read_streamers(file_path="streamers.txt"):
     if not os.path.exists(file_path):
@@ -184,7 +195,86 @@ def parse_args():
     parser.add_argument("--timeout", type=int, default=25200, help="Streamlink timeout in seconds (default: 25200)")
     parser.add_argument("--fast-exit", action="store_true", help="Force instant exit on Ctrl+C (skips cleanup, may leave temporary files)")
     parser.add_argument("--no-watchdog", action="store_true", help="Disable watchdog thread for testing")
+    parser.add_argument("--hls-url", help="HLS URL to record (e.g., https://example.com/stream.m3u8). Overrides automatic fetching.")
     return parser.parse_args()
+
+# Fetch HLS URL using yt-dlp
+def fetch_hls_url(streamer_url, cookies=None):
+    """Fetch the HLS URL using yt-dlp."""
+    logger.debug(f"Attempting to fetch HLS URL for {streamer_url} using yt-dlp")
+    cmd = [
+        "yt-dlp", "--get-url", streamer_url,
+        "--add-header", "Referer:https://twitcasting.tv/",
+        "--add-header", "Origin:https://twitcasting.tv/"
+    ]
+    
+    # Add cookies if provided
+    cookies_file = None
+    if cookies:
+        cookies_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
+        try:
+            with open(cookies_file, "w", encoding="utf-8") as f:
+                f.write("# Netscape HTTP Cookie File\n")
+                for cookie in cookies.split(';'):
+                    if cookie.strip():
+                        try:
+                            name, value = cookie.strip().split('=', 1)
+                            # Skip problematic cookies (e.g., Google Analytics)
+                            if name.startswith('_ga') or '.' in value:
+                                logger.debug(f"Skipping cookie '{name}' due to potential parsing issues")
+                                continue
+                            # Sanitize value to remove problematic characters
+                            value = re.sub(r'[^\w\-]', '_', value)
+                            f.write(f".twitcasting.tv\tTRUE\t/\tFALSE\t0\t{name}\t{value}\n")
+                        except ValueError:
+                            logger.warning(f"Invalid cookie format: {cookie}")
+            cmd.extend(["--cookies", cookies_file])
+            logger.debug(f"Wrote cookies to {cookies_file}")
+        except Exception as e:
+            logger.warning(f"Failed to write cookies file: {e}")
+    
+    try:
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding='utf-8'
+        )
+        stdout, stderr = process.communicate(timeout=30)
+        if process.returncode == 0:
+            hls_url = stdout.strip()
+            if re.match(r'^https?://.*\.(m3u8|mp4)$', hls_url):
+                logger.info(f"Fetched HLS URL using yt-dlp: {hls_url}")
+                return hls_url
+            else:
+                logger.warning(f"yt-dlp returned invalid HLS URL: {hls_url}")
+                return None
+        else:
+            logger.error(f"yt-dlp failed to fetch URL: {stderr}")
+            return None
+    except subprocess.TimeoutExpired:
+        logger.error("yt-dlp timed out while fetching HLS URL")
+        if process:
+            process.terminate()
+            try:
+                process.wait(timeout=0.1)
+            except subprocess.TimeoutExpired:
+                logger.warning("Failed to terminate yt-dlp process")
+        return None
+    except subprocess.SubprocessError as e:
+        logger.error(f"Subprocess error while running yt-dlp: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Unexpected error fetching HLS URL with yt-dlp: {e}")
+        return None
+    finally:
+        if cookies_file and os.path.exists(cookies_file):
+            try:
+                os.remove(cookies_file)
+                logger.debug(f"Deleted temporary cookies file: {cookies_file}")
+            except Exception as e:
+                logger.warning(f"Failed to delete cookies file: {e}")
 
 # Main execution
 if __name__ == "__main__":
@@ -196,6 +286,7 @@ if __name__ == "__main__":
     TIMEOUT = args.timeout
     FAST_EXIT = args.fast_exit
     NO_WATCHDOG = args.no_watchdog
+    HLS_URL = args.hls_url or os.environ.get('HLS_URL')
 
     # Initialize logger with null handler
     logger = logging.getLogger(__name__)
@@ -217,6 +308,7 @@ if __name__ == "__main__":
     # Check dependencies
     check_streamlink()
     check_ffmpeg()
+    check_ytdlp()
 
     # Read streamers and select one
     streamers = read_streamers(STREAMERS_FILE)
@@ -243,7 +335,7 @@ if __name__ == "__main__":
     logger = recorder.setup_logging(debug=args.debug)
 
     # Log script info
-    SCRIPT_VERSION = "v2025.05.05.05"
+    SCRIPT_VERSION = "v2025.05.05.08"
     logger.info(f"Running script version: {SCRIPT_VERSION}")
     logger.info(f"Python version: {sys.version}")
     logger.info(f"tqdm available: {tqdm is not None}")
@@ -284,7 +376,7 @@ if __name__ == "__main__":
         if not requests or not BeautifulSoup:
             logger.error("Cannot log in: requests or BeautifulSoup module is not available")
             return None
-        login_url = "https://twitcasting.tv/index.php"
+        login_url = "https://twitcasting.tv/indexpasswordlogin.php?redir=%2Findexloginwindow.php%3Fnext%3D%252F"
         session = requests.Session()
         try:
             response = session.get(login_url, timeout=10)
@@ -347,9 +439,44 @@ if __name__ == "__main__":
                         recorder.last_streamlink_check_success = True
                         if process.returncode == 0:
                             stream_data = json.loads(stdout)
-                            live = "error" not in stream_data
-                            logger.info(f"Streamlink check: {'Live' if live else 'Offline'}")
-                            return live
+                            is_live = "error" not in stream_data
+                            logger.info(f"Streamlink check: {'Live' if is_live else 'Offline'}")
+                            
+                            if is_live:
+                                max_metadata_retries = 3
+                                for metadata_attempt in range(max_metadata_retries):
+                                    try:
+                                        logger.debug(f"Fetching stream metadata (attempt {metadata_attempt + 1}/{max_metadata_retries})")
+                                        title, stream_id, thumbnail_url = fetch_stream_info()
+                                        
+                                        if not title:
+                                            logger.warning("Stream appears live but couldn't get valid title")
+                                            if metadata_attempt < max_metadata_retries - 1:
+                                                time.sleep(2)
+                                                continue
+                                            else:
+                                                title = f"{streamer_name}'s TwitCasting Stream"
+                                                logger.info(f"Using fallback title: {title}")
+                                        
+                                        if not stream_id:
+                                            logger.warning("Stream appears live but couldn't get valid stream ID")
+                                            if metadata_attempt < max_metadata_retries - 1:
+                                                time.sleep(2)
+                                                continue
+                                            else:
+                                                logger.error("Failed to get stream ID after all retries")
+                                                return (False, None, None, None)
+                                        
+                                        logger.info(f"Got stream metadata - Title: '{title}', ID: {stream_id}")
+                                        return (True, title, stream_id, thumbnail_url)
+                                    except Exception as e:
+                                        logger.error(f"Failed to fetch stream metadata: {e}")
+                                        if metadata_attempt < max_metadata_retries - 1:
+                                            logger.info(f"Retrying metadata fetch in 2 seconds...")
+                                            time.sleep(2)
+                                        else:
+                                            return (False, None, None, None)
+                            return (False, None, None, None)
                         else:
                             logger.debug(f"Streamlink check failed: {stdout}")
                             if attempt < max_retries_per_cycle - 1:
@@ -362,7 +489,10 @@ if __name__ == "__main__":
                         recorder.last_streamlink_check_success = False
                         if process:
                             process.terminate()
-                            process.wait(timeout=0.1)
+                            try:
+                                process.wait(timeout=0.1)
+                            except subprocess.TimeoutExpired:
+                                logger.warning("Failed to terminate streamlink process")
                     except json.JSONDecodeError as e:
                         logger.error(f"JSON decode error: {e}")
                         recorder.last_streamlink_check_success = False
@@ -371,7 +501,10 @@ if __name__ == "__main__":
                     finally:
                         if process and process.poll() is None:
                             process.terminate()
-                            process.wait(timeout=0.1)
+                            try:
+                                process.wait(timeout=0.1)
+                            except subprocess.TimeoutExpired:
+                                logger.warning("Failed to terminate streamlink process")
                 msg = f"All {max_retries_per_cycle} retries failed. Retrying in {recorder.retry_delay} seconds..."
                 sys.stderr.write(msg + "\r")
                 sys.stderr.flush()
@@ -380,35 +513,69 @@ if __name__ == "__main__":
             logger.handlers = original_handlers
             sys.stderr.write("\n")
             sys.stderr.flush()
-        return False
+        return (False, None, None, None)
 
     def fetch_stream_info():
+        """Fetch stream information including title, stream ID, and thumbnail URL."""
         title = f"{streamer_name}'s TwitCasting Stream"
-        stream_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{random.randint(1000, 9999)}"
+        stream_id = None
         thumbnail_url = None
+        
         if not requests or not BeautifulSoup:
             logger.warning("Cannot fetch stream info: requests or BeautifulSoup unavailable")
             return title, stream_id, thumbnail_url
+            
         try:
             headers = {'User-Agent': DEFAULT_USER_AGENT}
             if TWITCASTING_COOKIES:
                 headers['Cookie'] = TWITCASTING_COOKIES
+                
+            logger.debug(f"Fetching stream info from {STREAMER_URL}")
             response = requests.get(STREAMER_URL, headers=headers, timeout=10)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "html.parser")
+            
             og_title = soup.find("meta", property="og:title") or soup.find("meta", attrs={"name": "twitter:title"})
             if og_title and og_title.get("content"):
                 title = og_title["content"].strip()
+                logger.debug(f"Found stream title: {title}")
+            else:
+                logger.warning("Could not find stream title in page metadata")
+                
             movie_link = soup.find("a", href=re.compile(r'/movie/\d+'))
             if movie_link:
                 stream_id_match = re.search(r'/movie/(\d+)', movie_link["href"])
                 if stream_id_match:
                     stream_id = stream_id_match.group(1)
+                    logger.debug(f"Found stream ID from movie link: {stream_id}")
+                else:
+                    logger.warning("Movie link found but couldn't extract stream ID")
+            else:
+                logger.debug("Movie link not found, searching for stream ID in page scripts")
+                script_tags = soup.find_all("script")
+                for script in script_tags:
+                    if script.string and "movieId" in script.string:
+                        id_match = re.search(r'movieId["\']?\s*:\s*["\']?(\d+)["\']?', script.string)
+                        if id_match:
+                            stream_id = id_match.group(1)
+                            logger.debug(f"Found stream ID from script: {stream_id}")
+                            break
+                
+                if not stream_id:
+                    logger.warning("Could not find stream ID in page content")
+            
             og_image = soup.find("meta", property="og:image") or soup.find("meta", attrs={"name": "twitter:image"})
             if og_image and og_image.get("content") and og_image["content"].startswith("http"):
                 thumbnail_url = og_image["content"]
+                logger.debug(f"Found thumbnail URL: {thumbnail_url}")
+            else:
+                logger.debug("Could not find thumbnail URL")
+                
         except requests.RequestException as e:
             logger.warning(f"Network error fetching stream info: {e}")
+        except Exception as e:
+            logger.warning(f"Unexpected error fetching stream info: {e}")
+            
         return title, stream_id, thumbnail_url
 
     def get_filename(title, stream_id, is_mkv=False):
@@ -528,7 +695,8 @@ if __name__ == "__main__":
                 check_disk_space(os.path.dirname(file_path))
             except Exception as e:
                 logger.debug(f"Progress monitoring error: {e}")
-            time.sleep(5)
+            if stop_event.wait(timeout=5):
+                break
         if progress_bar:
             with tqdm_lock:
                 try:
@@ -558,7 +726,10 @@ if __name__ == "__main__":
             "ffmpeg", "-i", mp4_file, "-c", "copy", "-map", "0"
         ] + metadata_args
         if thumbnail_path:
-            cmd.extend(["-attach", thumbnail_path, "-metadata:s:t", "mimetype=image/jpeg", "-metadata:s:t", "filename=thumbnail.jpg"])
+            if os.path.exists(thumbnail_path):
+                cmd.extend(["-attach", thumbnail_path, "-metadata:s:t", "mimetype=image/jpeg", "-metadata:s:t", "filename=thumbnail.jpg"])
+            else:
+                logger.warning(f"Thumbnail file {thumbnail_path} does not exist, skipping attachment")
         cmd.append(mkv_file)
         try:
             subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8')
@@ -581,26 +752,17 @@ if __name__ == "__main__":
                 return
             logger.debug("Starting cleanup of temporary files")
             try:
-                # Define backup folder
                 backup_folder = os.path.join(recorder.save_folder, "backup")
-                os.makedirs(backup_folder, exist_ok=True)  # Create backup folder if it doesn't exist
-
-                # Handle thumbnail
+                os.makedirs(backup_folder, exist_ok=True)
                 if recorder.current_thumbnail_path and os.path.exists(recorder.current_thumbnail_path):
-                    # Optionally move thumbnail to backup instead of deleting
                     backup_thumbnail_path = os.path.join(backup_folder, os.path.basename(recorder.current_thumbnail_path))
                     shutil.move(recorder.current_thumbnail_path, backup_thumbnail_path)
                     logger.info(f"Moved thumbnail to: {backup_thumbnail_path}")
-                    # Alternatively, keep deletion: os.remove(recorder.current_thumbnail_path)
-
-                # Handle MP4 file
                 if recorder.current_mp4_file and os.path.exists(recorder.current_mp4_file):
                     if os.path.getsize(recorder.current_mp4_file) == 0:
-                        # Delete empty files
                         os.remove(recorder.current_mp4_file)
                         logger.info(f"Deleted empty MP4: {recorder.current_mp4_file}")
                     else:
-                        # Move non-empty partial files to backup
                         backup_mp4_path = os.path.join(backup_folder, os.path.basename(recorder.current_mp4_file))
                         shutil.move(recorder.current_mp4_file, backup_mp4_path)
                         logger.info(f"Moved partial MP4 to: {backup_mp4_path}")
@@ -610,35 +772,37 @@ if __name__ == "__main__":
             logger.debug("Cleanup completed")
 
     def force_kill_process(process):
-        """Force kill a process using psutil or os.kill on Windows."""
         if not process:
             return
         try:
-            if psutil and process.pid:
-                p = psutil.Process(process.pid)
+            pid = process.pid
+            if psutil and psutil.pid_exists(pid):
+                p = psutil.Process(pid)
                 p.terminate()
                 try:
                     p.wait(timeout=0.1)
-                    logger.debug(f"Process {process.pid} terminated via psutil")
+                    logger.debug(f"Process {pid} terminated via psutil")
                 except psutil.TimeoutExpired:
                     p.kill()
-                    logger.warning(f"Process {process.pid} killed via psutil")
+                    logger.warning(f"Process {pid} killed via psutil")
             else:
                 process.terminate()
                 try:
                     process.wait(timeout=0.1)
-                    logger.debug(f"Process {process.pid} terminated")
+                    logger.debug(f"Process {pid} terminated")
                 except subprocess.TimeoutExpired:
                     process.kill()
-                    logger.warning(f"Process {process.pid} killed")
+                    logger.warning(f"Process {pid} killed")
                     if sys.platform == "win32":
                         try:
-                            os.kill(process.pid, signal.CTRL_C_EVENT)
-                            logger.debug(f"Sent CTRL_C_EVENT to process {process.pid}")
+                            os.kill(pid, signal.CTRL_C_EVENT)
+                            logger.debug(f"Sent CTRL_C_EVENT to process {pid}")
                         except OSError as e:
                             logger.warning(f"Failed to send CTRL_C_EVENT: {e}")
+        except psutil.NoSuchProcess:
+            logger.warning(f"Process {pid} not found during termination")
         except Exception as e:
-            logger.error(f"Error force-killing process {process.pid}: {e}")
+            logger.error(f"Error force-killing process {pid}: {e}")
 
     def signal_handler(sig, frame, recorder):
         start_time = time.time()
@@ -658,9 +822,9 @@ if __name__ == "__main__":
                     recorder.stop_event.set()
                 if recorder.progress_thread and recorder.progress_thread.is_alive():
                     logger.debug("Joining progress thread")
-                    recorder.progress_thread.join(timeout=0.1)
+                    recorder.progress_thread.join(timeout=1.0)
                     if recorder.progress_thread.is_alive():
-                        logger.warning("Progress thread did not exit")
+                        logger.warning("Progress thread did not exit cleanly")
                     else:
                         logger.debug("Progress thread joined")
                 if recorder.process:
@@ -679,7 +843,7 @@ if __name__ == "__main__":
                 sys.exit(1)
 
     def watchdog(recorder, timeout=3600):
-        check_interval = 5  # Reduced for faster response
+        check_interval = 5
         last_size = 0
         no_progress_time = 0
         while not recorder.watchdog_stop_event.is_set():
@@ -706,32 +870,63 @@ if __name__ == "__main__":
             if not progress_detected and no_progress_time >= timeout:
                 logger.error(f"No progress for {timeout} seconds. Terminating.")
                 os._exit(1)
-            time.sleep(check_interval)
+            if recorder.watchdog_stop_event.wait(timeout=check_interval):
+                break
 
     def record_stream(recorder):
+        global HLS_URL
         while True:
             if recorder.terminating:
                 break
-            if not is_stream_live(recorder):
-                logger.info(f"Stream offline. Checking in {recorder.check_interval} seconds...")
-                time.sleep(recorder.check_interval)
-                continue
-            title, stream_id, thumbnail_url = fetch_stream_info()
+
+            # If HLS_URL is provided or fetched, use it; otherwise, use WebSocket logic
+            if HLS_URL:
+                title, stream_id, thumbnail_url = fetch_stream_info()
+                if not title:
+                    logger.warning("Missing stream title, using default")
+                    title = f"{streamer_name}'s HLS Stream"
+                if not stream_id:
+                    logger.warning("Missing stream ID, generating random ID")
+                    stream_id = str(random.randint(1000000, 9999999))
+                logger.info(f"Ready to record HLS stream - Title: '{title}', ID: {stream_id}")
+                url = HLS_URL
+            else:
+                is_live, title, stream_id, thumbnail_url = is_stream_live(recorder)
+                if not is_live:
+                    logger.info(f"Stream offline. Checking in {recorder.check_interval} seconds...")
+                    new_hls_url = fetch_hls_url(recorder.streamer_url, TWITCASTING_COOKIES)
+                    if new_hls_url:
+                        logger.info(f"Fetched new HLS URL: {new_hls_url}")
+                        HLS_URL = new_hls_url
+                        continue
+                    time.sleep(recorder.check_interval)
+                    continue
+                if not title:
+                    logger.warning("Missing stream title, using default")
+                    title = f"{streamer_name}'s TwitCasting Stream"
+                if not stream_id:
+                    logger.error("Invalid stream ID received, cannot proceed with recording")
+                    logger.info(f"Waiting {recorder.retry_delay} seconds before retrying...")
+                    time.sleep(recorder.retry_delay)
+                    continue
+                logger.info(f"Ready to record stream - Title: '{title}', ID: {stream_id}")
+                url = f"{recorder.streamer_url}/movie/{stream_id}"
+
             with recorder.lock:
                 recorder.current_mp4_file = get_filename(title, stream_id, is_mkv=False)
                 mkv_file = get_filename(title, stream_id, is_mkv=True)
                 recorder.current_thumbnail_path = download_thumbnail(thumbnail_url)
             metadata = get_metadata(title)
-            movie_url = f"{recorder.streamer_url}/movie/{stream_id}"
-            for url in [recorder.streamer_url, movie_url]:
-                if recorder.terminating:
-                    break
-                logger.info(f"Recording from {url} to {recorder.current_mp4_file}...")
-                cmd = [
-                    "streamlink", url, recorder.quality, "-o", recorder.current_mp4_file, "--force",
-                    "--http-header", f"User-Agent={DEFAULT_USER_AGENT}",
-                    "--hls-live-restart", "--retry-streams", "30", "-v"
-                ]
+
+            logger.info(f"Recording from {url} to {recorder.current_mp4_file}...")
+            cmd = [
+                "streamlink", url, recorder.quality, "-o", recorder.current_mp4_file, "--force",
+                "--http-header", f"User-Agent={DEFAULT_USER_AGENT}",
+                "--hls-live-restart", "--retry-streams", "30", "-v"
+            ]
+            if HLS_URL:
+                cmd.extend(["--hls-playlist-reload-attempts", "5"])
+            else:
                 if PRIVATE_STREAM_PASSWORD:
                     cmd.extend(["--twitcasting-password", PRIVATE_STREAM_PASSWORD])
                 if TWITCASTING_COOKIES:
@@ -741,80 +936,83 @@ if __name__ == "__main__":
                             cmd.extend(["--http-cookie", cookie])
                         else:
                             logger.warning(f"Skipping invalid cookie: {cookie}")
-                try:
-                    start_time = time.time()
-                    recorder.stop_event = threading.Event()
-                    recorder.progress_thread = threading.Thread(
-                        target=monitor_file_progress,
-                        args=(recorder.current_mp4_file, start_time, recorder.stop_event, print_progress)
-                    )
-                    recorder.progress_thread.start()
-                    env = os.environ.copy()
-                    env["PYTHONIOENCODING"] = "utf-8"
-                    recorder.process = subprocess.Popen(
-                        cmd,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        text=False,
-                        env=env
-                    )
-                    stderr_lines = []
-                    stdout_lines = []
-                    last_output_time = time.time()
-                    while recorder.process.poll() is None and not recorder.terminating:
+
+            try:
+                start_time = time.time()
+                recorder.stop_event = threading.Event()
+                recorder.progress_thread = threading.Thread(
+                    target=monitor_file_progress,
+                    args=(recorder.current_mp4_file, start_time, recorder.stop_event, print_progress)
+                )
+                recorder.progress_thread.start()
+                env = os.environ.copy()
+                env["PYTHONIOENCODING"] = "utf-8"
+                recorder.process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding='utf-8'
+                )
+                stderr_lines = []
+                stdout_lines = []
+                last_output_time = time.time()
+                while recorder.process.poll() is None and not recorder.terminating:
+                    try:
+                        stdout_line = recorder.process.stdout.readline().strip()
+                        if stdout_line:
+                            stdout_lines.append(stdout_line)
+                            logger.debug(f"Streamlink stdout: {stdout_line}")
+                            last_output_time = time.time()
+                        stderr_line = recorder.process.stderr.readline().strip()
+                        if stderr_line:
+                            stderr_lines.append(stderr_line)
+                            logger.debug(f"Streamlink stderr: {stderr_line}")
+                            last_output_time = time.time()
+                        if time.time() - last_output_time > recorder.streamlink_timeout:
+                            logger.warning(f"No output for {recorder.streamlink_timeout} seconds. Terminating.")
+                            force_kill_process(recorder.process)
+                            break
                         try:
-                            stdout_line = recorder.process.stdout.readline()
-                            if stdout_line:
-                                line = stdout_line.decode('utf-8', errors='replace').strip()
-                                stdout_lines.append(line)
-                                logger.debug(f"Streamlink stdout: {line}")
-                                last_output_time = time.time()
-                            stderr_line = recorder.process.stderr.readline()
-                            if stderr_line:
-                                line = stderr_line.decode('utf-8', errors='replace').strip()
-                                stderr_lines.append(line)
-                                logger.debug(f"Streamlink stderr: {line}")
-                                last_output_time = time.time()
-                            if time.time() - last_output_time > recorder.streamlink_timeout:
-                                logger.warning(f"No output for {recorder.streamlink_timeout} seconds. Terminating.")
-                                force_kill_process(recorder.process)
-                                break
-                            try:
-                                if os.path.exists(recorder.current_mp4_file):
-                                    size = os.path.getsize(recorder.current_mp4_file)
-                                    logger.debug(f"File {recorder.current_mp4_file} size: {format_size(size)}")
-                            except OSError as e:
-                                logger.debug(f"Error checking file size in record_stream: {e}")
-                            time.sleep(0.1)
-                        except Exception as e:
-                            logger.debug(f"Error reading output: {e}")
-                    recorder.stop_event.set()
-                    recorder.progress_thread.join(timeout=0.1)
-                    sys.stderr.write("\n")
-                    sys.stderr.flush()
-                    stdout, stderr = recorder.process.communicate(timeout=5)
-                    if stdout:
-                        stdout_lines.extend(stdout.decode('utf-8', errors='replace').splitlines())
-                    if stderr:
-                        stderr_lines.extend(stderr.decode('utf-8', errors='replace').splitlines())
-                    if recorder.process.returncode == 0:
-                        logger.info("Recording stopped gracefully.")
-                        break
-                    else:
-                        logger.error(f"Recording failed: stdout={stdout_lines}, stderr={stderr_lines}")
-                        if url == movie_url:
-                            logger.error("Both URLs failed. Retrying.")
+                            if os.path.exists(recorder.current_mp4_file):
+                                size = os.path.getsize(recorder.current_mp4_file)
+                                logger.debug(f"File {recorder.current_mp4_file} size: {format_size(size)}")
+                        except OSError as e:
+                            logger.debug(f"Error checking file size in record_stream: {e}")
+                        time.sleep(0.1)
+                    except Exception as e:
+                        logger.debug(f"Error reading output: {e}")
+                recorder.stop_event.set()
+                recorder.progress_thread.join(timeout=1.0)
+                sys.stderr.write("\n")
+                sys.stderr.flush()
+                stdout, stderr = recorder.process.communicate(timeout=5)
+                stdout_lines.extend(stdout.splitlines())
+                stderr_lines.extend(stderr.splitlines())
+                if recorder.process.returncode == 0:
+                    logger.info("Recording stopped gracefully.")
+                else:
+                    logger.error(f"Recording failed: stdout={stdout_lines}, stderr={stderr_lines}")
+                    if HLS_URL:
+                        logger.info(f"HLS recording failed. Waiting {recorder.retry_delay} seconds before retrying...")
+                        HLS_URL = None  # Reset HLS_URL to try fetching again
+                        time.sleep(recorder.retry_delay)
                         continue
-                except subprocess.SubprocessError as e:
-                    logger.error(f"Subprocess error: {e}")
-                    if recorder.process:
-                        force_kill_process(recorder.process)
-                    if url == movie_url:
-                        logger.error("Both URLs failed. Retrying.")
-                    continue
-                finally:
-                    if recorder.process and recorder.process.poll() is None:
-                        force_kill_process(recorder.process)
+                    else:
+                        logger.info(f"Retrying with alternate URL or waiting...")
+                        continue
+            except subprocess.SubprocessError as e:
+                logger.error(f"Subprocess error: {e}")
+                if recorder.process:
+                    force_kill_process(recorder.process)
+                if HLS_URL:
+                    logger.info(f"HLS recording failed. Waiting {recorder.retry_delay} seconds before retrying...")
+                    HLS_URL = None  # Reset HLS_URL to try fetching again
+                    time.sleep(recorder.retry_delay)
+                continue
+            finally:
+                if recorder.process and recorder.process.poll() is None:
+                    force_kill_process(recorder.process)
             if recorder.terminating:
                 break
             if os.path.exists(recorder.current_mp4_file) and os.path.getsize(recorder.current_mp4_file) > 0:
@@ -825,6 +1023,28 @@ if __name__ == "__main__":
             logger.info(f"Waiting {recorder.retry_delay} seconds before checking stream...")
             time.sleep(recorder.retry_delay)
 
+    # Login if credentials provided
+    if TWITCASTING_USERNAME and TWITCASTING_PASSWORD:
+        cookies = login_to_twitcasting(TWITCASTING_USERNAME, TWITCASTING_PASSWORD)
+        if cookies:
+            TWITCASTING_COOKIES = ";".join(cookies)
+            logger.info("Updated TWITCASTING_COOKIES with login session")
+
+    # Initialize HLS_URL if not provided
+    if not HLS_URL:
+        HLS_URL = fetch_hls_url(STREAMER_URL, TWITCASTING_COOKIES)
+        if HLS_URL:
+            logger.info(f"Automatically fetched HLS URL: {HLS_URL}")
+        else:
+            logger.warning("Could not fetch HLS URL, falling back to WebSocket-based recording")
+
+    # Validate HLS URL if provided
+    if HLS_URL:
+        if not re.match(r'^https?://.*\.(m3u8|mp4)$', HLS_URL):
+            logger.error(f"Invalid HLS URL: {HLS_URL}. Must start with http(s):// and end with .m3u8 or .mp4.")
+            sys.exit(1)
+        logger.info(f"Using HLS URL: {HLS_URL}")
+
     # Setup signal handler
     signal.signal(signal.SIGINT, lambda sig, frame: signal_handler(sig, frame, recorder))
 
@@ -832,15 +1052,8 @@ if __name__ == "__main__":
     watchdog_thread = None
     if not NO_WATCHDOG:
         watchdog_thread = threading.Thread(target=watchdog, args=(recorder, 3600))
-        watchdog_thread.daemon = True  # Exit when main thread exits
+        watchdog_thread.daemon = True
         watchdog_thread.start()
-
-    # Login if credentials provided
-    if TWITCASTING_USERNAME and TWITCASTING_PASSWORD:
-        cookies = login_to_twitcasting(TWITCASTING_USERNAME, TWITCASTING_PASSWORD)
-        if cookies:
-            TWITCASTING_COOKIES = ";".join(cookies)
-            logger.info("Updated TWITCASTING_COOKIES with login session")
 
     try:
         record_stream(recorder)
