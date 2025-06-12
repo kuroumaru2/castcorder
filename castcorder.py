@@ -14,7 +14,6 @@ import platform
 import random
 import shutil
 import requests
-import numpy
 from bs4 import BeautifulSoup
 from urllib.parse import quote
 
@@ -76,6 +75,7 @@ class StreamRecorder:
         self.check_interval = int(os.environ.get('CHECK_INTERVAL', 15))
         self.retry_delay = int(os.environ.get('RETRY_DELAY', 15))
         self.streamlink_timeout = int(os.environ.get('STREAMLINK_TIMEOUT', timeout))
+        self.last_stream_state = None  # Tracks if stream was last live (True), offline (False), or unknown (None)
 
     def setup_logging(self, debug=False):
         """Set up logging with file and console handlers, avoiding duplicates."""
@@ -326,15 +326,19 @@ def is_stream_live(recorder, max_retries=10):
                 if process.returncode == 0:
                     stream_data = json.loads(stdout)
                     is_live = "error" not in stream_data
-                    logger.info(f"Streamlink check: {'Live' if is_live else 'Offline'}")
-                    
+                    # Log state change
+                    if is_live and recorder.last_stream_state is not True:
+                        logger.info("Stream is now live")
+                        recorder.last_stream_state = True
+                    elif not is_live and recorder.last_stream_state is not False:
+                        logger.info(f"Stream offline. Checking again in {recorder.check_interval} seconds...")
+                        recorder.last_stream_state = False
                     if is_live:
                         max_metadata_retries = 3
                         for metadata_attempt in range(max_metadata_retries):
                             try:
                                 logger.debug(f"Fetching stream metadata (attempt {metadata_attempt + 1}/{max_metadata_retries})")
                                 title, stream_id, thumbnail_url = fetch_stream_info()
-                                
                                 if not title:
                                     logger.warning("Stream appears live but couldn't get valid title")
                                     if metadata_attempt < max_metadata_retries - 1:
@@ -343,16 +347,15 @@ def is_stream_live(recorder, max_retries=10):
                                     else:
                                         title = f"{streamer_name}'s TwitCasting Stream"
                                         logger.info(f"Using fallback title: {title}")
-                                
                                 if not stream_id:
                                     logger.warning("Stream appears live but couldn't get valid stream ID")
                                     if metadata_attempt < max_metadata_retries - 1:
                                         time.sleep(2)
                                         continue
                                     else:
-                                        logger.error("Failed to get stream ID after all retries")
-                                        return (False, None, None, None)
-                                
+                                        # Assign a random stream ID as fallback
+                                        stream_id = str(random.randint(1000000, 9999999))
+                                        logger.info(f"Assigned random stream ID: {stream_id}")
                                 logger.info(f"Got stream metadata - Title: '{title}', ID: {stream_id}")
                                 sys.stderr.write("\r" + " " * 80 + "\r")  # Clear line
                                 sys.stderr.flush()
@@ -363,39 +366,45 @@ def is_stream_live(recorder, max_retries=10):
                                     logger.info(f"Retrying metadata fetch in 2 seconds...")
                                     time.sleep(2)
                                 else:
-                                    return (False, None, None, None)
+                                    # Assign a random stream ID if stream is live but metadata fetch fails
+                                    stream_id = str(random.randint(1000000, 9999999))
+                                    logger.info(f"Failed to get stream ID after all retries. Assigned random stream ID: {stream_id}")
+                                    title = f"{streamer_name}'s TwitCasting Stream"
+                                    sys.stderr.write("\r" + " " * 80 + "\r")  # Clear line
+                                    sys.stderr.flush()
+                                    return (True, title, stream_id, thumbnail_url)
                     sys.stderr.write("\r" + " " * 80 + "\r")  # Clear line
                     sys.stderr.flush()
                     return (False, None, None, None)
                 else:
                     logger.debug(f"Streamlink check failed: {stdout}")
                     attempt += 1
-                    if attempt < max_retries:
+                    if attempt < max_retries and recorder.last_stream_state is not False:
                         msg = f"Retrying in {recorder.retry_delay} seconds... (Attempt {attempt + 1}/{max_retries})"
                         sys.stderr.write(f"\r{msg.ljust(80)}")  # Overwrite same line
                         sys.stderr.flush()
                         logger.info(msg)
-                        time.sleep(recorder.retry_delay)
+                    time.sleep(recorder.retry_delay)
             except subprocess.TimeoutExpired:
                 logger.error("Streamlink check timed out")
                 recorder.last_streamlink_check_success = False
                 attempt += 1
-                if attempt < max_retries:
+                if attempt < max_retries and recorder.last_stream_state is not False:
                     msg = f"Retrying in {recorder.retry_delay} seconds... (Attempt {attempt + 1}/{max_retries})"
                     sys.stderr.write(f"\r{msg.ljust(80)}")  # Overwrite same line
                     sys.stderr.flush()
                     logger.info(msg)
-                    time.sleep(recorder.retry_delay)
+                time.sleep(recorder.retry_delay)
             except json.JSONDecodeError as e:
                 logger.error(f"JSON decode error: {e}")
                 recorder.last_streamlink_check_success = False
                 attempt += 1
-                if attempt < max_retries:
+                if attempt < max_retries and recorder.last_stream_state is not False:
                     msg = f"Retrying in {recorder.retry_delay} seconds... (Attempt {attempt + 1}/{max_retries})"
                     sys.stderr.write(f"\r{msg.ljust(80)}")  # Overwrite same line
                     sys.stderr.flush()
                     logger.info(msg)
-                    time.sleep(recorder.retry_delay)
+                time.sleep(recorder.retry_delay)
             finally:
                 if process and process.poll() is None:
                     process.terminate()
@@ -793,7 +802,6 @@ def record_stream(recorder):
         is_live, title, _, thumbnail_url = is_stream_live(recorder, max_retries=10)
 
         if not is_live:
-            logger.info(f"Stream offline. Checking again in {recorder.check_interval} seconds...")
             time.sleep(recorder.check_interval)
             continue
 
@@ -967,7 +975,7 @@ if __name__ == "__main__":
     recorder = StreamRecorder(STREAMER_URL, SAVE_FOLDER, LOG_FILE, QUALITY, USE_PROGRESS_BAR, TIMEOUT)
     logger = recorder.setup_logging(debug=args.debug)
 
-    SCRIPT_VERSION = "v2025.06.08"
+    SCRIPT_VERSION = "v2025.06.13"
     logger.info(f"Running script version: {SCRIPT_VERSION}")
     logger.info(f"Python version: {sys.version}")
     logger.info(f"tqdm available: {tqdm is not None}")
