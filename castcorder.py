@@ -30,6 +30,14 @@ try:
 except ImportError:
     tqdm = None
     print("tqdm not installed. Progress bar will be disabled.")
+    
+def mask_cookie_value(cookie_value):
+    """Mask sensitive cookie values for logging, showing only the first 4 and last 4 characters."""
+    if not cookie_value:
+        return "****"
+    if len(cookie_value) <= 8:
+        return "****"
+    return f"{cookie_value[:4]}****{cookie_value[-4:]}"    
 
 # Ensure unbuffered stdout and stderr for real-time console updates
 sys.stdout.reconfigure(line_buffering=True)
@@ -213,7 +221,7 @@ def extract_stream_id_from_hls_url(hls_url):
 
 # Fetch HLS URL using yt-dlp
 def fetch_hls_url(streamer_url, cookies=None):
-    """Fetch the HLS URL using yt-dlp."""
+    """Fetch the HLS URL using yt-dlp with secure cookie handling."""
     logger.debug(f"Attempting to fetch HLS URL for {streamer_url} using yt-dlp")
     cmd = [
         "yt-dlp", "--get-url", streamer_url,
@@ -223,9 +231,12 @@ def fetch_hls_url(streamer_url, cookies=None):
     
     cookies_file = None
     if cookies:
-        cookies_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
+        import tempfile
+        import stat
         try:
-            with open(cookies_file, "w", encoding="utf-8") as f:
+            # Create a temporary file with restrictive permissions (600)
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
+                cookies_file = f.name
                 f.write("# Netscape HTTP Cookie File\n")
                 for cookie in cookies.split(';'):
                     if cookie.strip():
@@ -236,12 +247,22 @@ def fetch_hls_url(streamer_url, cookies=None):
                                 continue
                             value = re.sub(r'[^\w\-]', '_', value)
                             f.write(f".twitcasting.tv\tTRUE\t/\tFALSE\t0\t{name}\t{value}\n")
+                            logger.debug(f"Wrote cookie '{name}' to temporary file")
                         except ValueError:
                             logger.warning(f"Invalid cookie format: {cookie}")
+            # Set file permissions to owner-only (600)
+            os.chmod(cookies_file, stat.S_IRUSR | stat.S_IWUSR)
             cmd.extend(["--cookies", cookies_file])
-            logger.debug(f"Wrote cookies to {cookies_file}")
+            logger.debug(f"Created secure temporary cookies file: {cookies_file}")
         except Exception as e:
-            logger.warning(f"Failed to write cookies file: {e}")
+            logger.warning(f"Failed to create secure cookies file: {e}")
+            if cookies_file and os.path.exists(cookies_file):
+                try:
+                    os.remove(cookies_file)
+                    logger.debug(f"Deleted temporary cookies file due to error: {cookies_file}")
+                except Exception as e:
+                    logger.warning(f"Failed to delete cookies file: {e}")
+            return None
     
     try:
         process = subprocess.Popen(
@@ -254,11 +275,11 @@ def fetch_hls_url(streamer_url, cookies=None):
         stdout, stderr = process.communicate(timeout=30)
         if process.returncode == 0:
             hls_url = stdout.strip()
-            if re.match(r'^https?://.*\.(m3u8|mp4)$', hls_url):
+            if re.match(r'^https://.*\.(m3u8|mp4)$', hls_url):  # Ensure HTTPS
                 logger.info(f"Fetched HLS URL using yt-dlp: {hls_url}")
                 return hls_url
             else:
-                logger.warning(f"yt-dlp returned invalid HLS URL: {hls_url}")
+                logger.warning(f"yt-dlp returned non-HTTPS or invalid HLS URL: {hls_url}")
                 return None
         else:
             logger.error(f"yt-dlp failed to fetch URL: {stderr}")
@@ -814,6 +835,12 @@ def record_stream(recorder):
                 time.sleep(recorder.retry_delay)
                 continue
             logger.info(f"Fetched HLS URL: {HLS_URL}")
+            # Ensure HLS URL uses HTTPS
+            if not HLS_URL.startswith('https://'):
+                logger.warning(f"HLS URL is not secure (non-HTTPS): {HLS_URL}. Cookies may not be transmitted securely.")
+                HLS_URL = None
+                time.sleep(recorder.retry_delay)
+                continue
 
         # Extract stream ID from HLS URL
         stream_id = extract_stream_id_from_hls_url(HLS_URL)
@@ -845,6 +872,28 @@ def record_stream(recorder):
             "--hls-playlist-reload-attempts", "5"
         ]
 
+        # Add multiple HTTP cookies to the Streamlink command
+        cookie_count = 0
+        if TWITCASTING_COOKIES:
+            for cookie in TWITCASTING_COOKIES.split(';'):
+                cookie = cookie.strip()
+                if cookie and '=' in cookie:
+                    try:
+                        name, value = cookie.split('=', 1)
+                        cmd.extend(["--http-cookie", f"{name}={value}"])
+                        logger.debug(f"Added HTTP cookie to Streamlink: {name}={mask_cookie_value(value)}")
+                        cookie_count += 1
+                    except ValueError:
+                        logger.warning(f"Skipping invalid cookie format: {cookie}")
+                else:
+                    logger.warning(f"Skipping invalid or empty cookie: {cookie}")
+            if cookie_count > 0:
+                logger.info(f"Successfully added {cookie_count} HTTP cookie(s) to Streamlink command")
+            else:
+                logger.warning("No valid HTTP cookies were added to Streamlink command")
+        else:
+            logger.info("No HTTP cookies provided for Streamlink")
+
         try:
             start_time = time.time()
             recorder.stop_event = threading.Event()
@@ -865,6 +914,7 @@ def record_stream(recorder):
             stderr_lines = []
             stdout_lines = []
             last_output_time = time.time()
+            cookie_usage_confirmed = False
             while recorder.process.poll() is None and not recorder.terminating:
                 try:
                     stdout_line = recorder.process.stdout.readline().strip()
@@ -877,6 +927,15 @@ def record_stream(recorder):
                         stderr_lines.append(stderr_line)
                         logger.debug(f"Streamlink stderr: {stderr_line}")
                         last_output_time = time.time()
+                        # Check for authentication-related errors
+                        if any(err in stderr_line.lower() for err in ["401", "unauthorized", "access denied", "authentication"]):
+                            logger.warning(f"Possible cookie issue detected in Streamlink output: {stderr_line}")
+                            cookie_usage_confirmed = False
+                    # If we see progress and no auth errors, assume cookies worked
+                    if os.path.exists(recorder.current_mp4_file) and os.path.getsize(recorder.current_mp4_file) > 0 and not cookie_usage_confirmed:
+                        if cookie_count > 0:
+                            logger.info("HTTP cookies appear to have been successfully used by Streamlink (recording started)")
+                        cookie_usage_confirmed = True
                     if time.time() - last_output_time > recorder.streamlink_timeout:
                         logger.warning(f"No output for {recorder.streamlink_timeout} seconds. Terminating.")
                         force_kill_process(recorder.process)
@@ -897,8 +956,14 @@ def record_stream(recorder):
             stdout, stderr = recorder.process.communicate(timeout=5)
             stdout_lines.extend(stdout.splitlines())
             stderr_lines.extend(stderr.splitlines())
-            if recorder.process.returncode == 0:
+            # Final check for cookie-related errors
+            error_patterns = ["401", "unauthorized", "access denied", "authentication"]
+            if any(any(err in line.lower() for err in error_patterns) for line in stderr_lines):
+                logger.warning("Streamlink encountered authentication errors. HTTP cookies may be invalid or insufficient.")
+            elif recorder.process.returncode == 0:
                 logger.info("Recording stopped gracefully.")
+                if cookie_count > 0 and not cookie_usage_confirmed:
+                    logger.info("HTTP cookies likely used successfully by Streamlink (no errors detected)")
             else:
                 logger.error(f"Recording failed: stdout={stdout_lines}, stderr={stderr_lines}")
                 logger.info(f"HLS recording failed. Resetting HLS_URL and retrying...")
@@ -975,7 +1040,7 @@ if __name__ == "__main__":
     recorder = StreamRecorder(STREAMER_URL, SAVE_FOLDER, LOG_FILE, QUALITY, USE_PROGRESS_BAR, TIMEOUT)
     logger = recorder.setup_logging(debug=args.debug)
 
-    SCRIPT_VERSION = "v2025.06.13"
+    SCRIPT_VERSION = "v2025.06.14"
     logger.info(f"Running script version: {SCRIPT_VERSION}")
     logger.info(f"Python version: {sys.version}")
     logger.info(f"tqdm available: {tqdm is not None}")
@@ -998,6 +1063,13 @@ if __name__ == "__main__":
     DEFAULT_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/101.0.4951.67 Safari/537.36"
 
     def login_to_twitcasting(username, password):
+        if not username:
+            username = input("Enter TwitCasting username: ")
+        if not password:
+            password = input("Enter TwitCasting password: ")
+        if not username or not password:
+            logger.error("TWITCASTING_USERNAME or TWITCASTING_PASSWORD not set, cannot proceed with login")
+        return None
         if not requests or not BeautifulSoup:
             logger.error("Cannot log in: requests or BeautifulSoup module is not available")
             return None
