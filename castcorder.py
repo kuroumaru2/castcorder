@@ -1092,8 +1092,8 @@ if __name__ == "__main__":
                 logger.error("Login failed: Invalid credentials or CAPTCHA required")
                 return None
             cookies = session.cookies.get_dict()
-            if "twitcasting_sess" not in cookies:
-                logger.error("Login failed: twitcasting_sess cookie not found")
+            if "tc_ss" not in cookies:
+                logger.error("Login failed: tc_ss cookie not found")
                 return None
             logger.info("Login successful. Retrieved cookies.")
             return [f"{key}={value}" for key, value in cookies.items()]
