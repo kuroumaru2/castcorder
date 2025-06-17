@@ -17,7 +17,7 @@ A Python script to record live streams from TwitCasting, with support for automa
 ## Prerequisites
 Before running the script, ensure the following dependencies are installed:
 
-### Required Software
+## Required Software
 1. **Python 3.6+**: The script requires a compatible Python version.
 2. **FFmpeg**: For recording, repairing, converting streams to MKV, and analyzing stream duration (includes `ffmpeg` and `ffprobe`).
    - Ubuntu/Debian:
@@ -132,15 +132,11 @@ If --streamer is not provided, the script prompts to select a streamer from this
 A cookies.txt file is required in the script directory for authenticated streams.
 
 ## Output
-Recordings:
-Saved in [script_directory]/[streamer_name]/ as MKV files.
-Filename Format:
-[<YYYYMMDD>] <title> [<username>][stream_id].mkv
-Thumbnails:
-Attached to MKV files if available.
-Log File:
-Saved as [script_directory]/[streamer_name]/twitcast_recorder_[streamer_name].log or twitcast_recorder_direct.log for direct HLS recordings.
-Backup Files: Incomplete or failed files are moved to [script_directory]/[streamer_name]/backup/.
+1. Recordings: Saved in [script_directory]/[streamer_name]/ as MKV files.
+2. Filename Format: [<YYYYMMDD>] <title> [<username>][stream_id].mkv
+3. Thumbnails: Attached to MKV files if available.
+4. Log File: Saved as [script_directory]/[streamer_name]/twitcast_recorder_[streamer_name].log or twitcast_recorder_direct.log for direct HLS recordings.
+5. Backup Files: Incomplete or failed files are moved to [script_directory]/[streamer_name]/backup/.
 
 ## Notes
 1. Ensure streamers.txt exists and is not empty if using the streamers file.
