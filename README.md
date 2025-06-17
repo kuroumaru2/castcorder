@@ -23,11 +23,10 @@ Before running the script, ensure the following dependencies are installed:
    - Ubuntu/Debian:
 
          sudo apt-get install ffmpeg
-
          sudo apt-get install ffprobe
      
    - macOS (Homebrew):
-   
+
          brew install ffmpeg
      
    - Windows: Download from [FFmpeg website](https://ffmpeg.org/download.html) and add to PATH.
