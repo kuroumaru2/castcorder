@@ -33,7 +33,6 @@ def setup_logging(debug, streamer=None):
     if sanitized_streamer:
         log_file.parent.mkdir(parents=True, exist_ok=True)
     
-    # Custom logging handler to update console with \r for "Stream offline"
     class StreamOfflineHandler(logging.StreamHandler):
         def emit(self, record):
             if "Stream offline" in record.msg:
@@ -71,7 +70,7 @@ def check_dependencies():
 # Load configuration
 def load_config(config_file):
     config = configparser.ConfigParser()
-    config.read(config_file)
+    config.read(config_file, encoding='utf-8')
     defaults = {
         "check_interval": os.getenv("CHECK_INTERVAL", "15"),
         "retry_delay": os.getenv("RETRY_DELAY", "15"),
@@ -88,7 +87,7 @@ def load_config(config_file):
 def parse_args():
     parser = argparse.ArgumentParser(description="TwitCasting Stream Recorder")
     parser.add_argument("--streamer", help="Streamer username")
-    parser.add_argument("--quality", default="best", help="Stream quality (default: best)")
+    parser.add_argument("--quality", default="best", help="Stream quality (best, high, medium, low)")
     parser.add_argument("--streamers-file", type=Path, default=SCRIPT_DIR / "streamers.txt", help="File containing streamer usernames")
     parser.add_argument("--debug", action="store_true", help="Enable verbose logging")
     parser.add_argument("--fast-exit", action="store_true", help="Skip cleanup on exit")
@@ -208,29 +207,51 @@ def get_unique_filename(base_path, ext):
             return new_path
         i += 1
 
-# Check if stream is live
-def is_stream_live(streamer, cookies_file, retry_delay):
-    cmd = [
-        "yt-dlp",
-        "--get-url",
-        "--hls-use-mpegts",
-        "--cookies", str(cookies_file),
-        "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/101.0.4951.67 Safari/537.36",
-        "--add-header", "Referer:https://twitcasting.tv/",
-        "--add-header", "Origin:https://twitcasting.tv/",
-        f"https://twitcasting.tv/{streamer}"
-    ]
+# Check if stream is live using the API
+def check_stream_status(streamer, retry_delay, quality="best"):
+    api_url = f"https://twitcasting.tv/streamserver.php?target={streamer}&mode=client&player=pc_web"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/101.0.4951.67 Safari/537.36"
+    }
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        if result.returncode == 0 and result.stdout.strip():
-            logging.info(f"Successfully used cookies from {cookies_file} for {streamer}")
-            return True, result.stdout.strip()
-        if "401" in result.stderr or "unauthorized" in result.stderr.lower():
-            logging.error("Authentication error: Check cookies or credentials")
-        logging.info(f"Stream offline: {streamer}, retrying in {retry_delay} seconds")
-        return False, None
-    except subprocess.SubprocessError as e:
-        logging.warning(f"Stream check failed: {e}")
+        response = requests.get(api_url, headers=headers, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        
+        # Log the API response for debugging
+        logging.debug(f"API response for {streamer}: {data}")
+        
+        # Extract movie and tc-hls data
+        movie = data.get("movie", {})
+        tc_hls = data.get("tc-hls", {})
+        is_live = movie.get("live", False)
+        
+        # Only attempt to get hls_url if the stream is live
+        hls_url = None
+        if is_live:
+            streams = tc_hls.get("streams", {})
+            # Select stream based on quality preference
+            if quality == "best":
+                for q in ["high", "medium", "low"]:
+                    if q in streams:
+                        hls_url = streams[q]
+                        break
+            else:
+                hls_url = streams.get(quality)
+            
+            # Validate hls_url is a string and non-empty
+            if not isinstance(hls_url, str) or not hls_url:
+                logging.warning(f"Invalid or missing HLS URL in tc-hls.streams for quality {quality}: {hls_url}")
+                return False, None
+        
+        if is_live and hls_url:
+            logging.debug(f"Stream is live, HLS URL: {hls_url}")
+            return True, hls_url
+        else:
+            logging.info(f"Stream offline or no valid HLS URL: {streamer}, retrying in {retry_delay} seconds")
+            return False, None
+    except requests.RequestException as e:
+        logging.warning(f"API request failed: {e}")
         logging.info(f"Stream offline: {streamer}, retrying in {retry_delay} seconds")
         time.sleep(retry_delay)
         return False, None
@@ -249,154 +270,144 @@ def get_stream_duration(file_path, retries=3, delay=1):
     logging.warning(f"Failed to parse duration for {file_path} after {retries} attempts")
     return 0
 
-# Repair incomplete MP4 files
-def repair_mp4(mp4_file):
-    repaired_file = mp4_file.with_suffix(".repaired.mp4")
-    cmd = ["ffmpeg", "-i", str(mp4_file), "-c", "copy", "-map", "0", "-movflags", "faststart", str(repaired_file)]
-    try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
-        mp4_file.unlink()
-        shutil.move(repaired_file, mp4_file)
-        logging.info(f"Repaired MP4 file: {mp4_file}")
-    except subprocess.SubprocessError as e:
-        logging.warning(f"Failed to repair MP4 file: {e}")
-
 # Record stream
-def record_stream(hls_url, output_file, cookies_file, quality):
+def record_stream(hls_url, output_file, cookies_file, quality, max_retries=3):
     global PROCESS
     logging.info(f"Recording HLS URL: {hls_url}")
     
-    # Command to execute yt-dlp for recording the stream
-    cmd = [
-        "yt-dlp",
-        "--hls-use-mpegts",
-        "--xattrs",
-        "--ignore-no-formats-error",
-        "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/101.0.4951.67 Safari/537.36",
-        "--cookies", str(cookies_file),
-        "--add-header", "Referer:https://twitcasting.tv/",
-        "--add-header", "Origin:https://twitcasting.tv/",
-        "-f", quality,
-        "--ffmpeg-location", shutil.which("ffmpeg"),
-        "--output", str(output_file),
-        "--progress",
-        "--hls-prefer-ffmpeg",
-        "--no-part",
-        "--postprocessor-args", "-movflags frag_keyframe+empty_moov -f mp4",
-        hls_url
-    ]
-    
-    # Start the yt-dlp process
-    try:
-        PROCESS = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-            universal_newlines=True
-        )
-    except subprocess.SubprocessError as e:
-        logging.error(f"Failed to start recording process: {e}")
-        return
-    
-    start_time = time.time()
-    last_progress = ""
-    # Regex to parse yt-dlp progress output
-    progress_re = re.compile(r"frame=\s*\d+\s+fps=\s*[\d.]+.*size=\s*(\d+)KiB\s+time=(\d{2}):(\d{2}):(\d{2})\.\d+\s+bitrate=\s*([\d.]+)kbits/s")
-    
-    # Monitor process output
-    while PROCESS.poll() is None:
+    # Verify cookies file
+    if cookies_file.exists():
         try:
-            line = PROCESS.stderr.readline().strip()
-            if line:
-                match = progress_re.search(line)
-                if match:
-                    size_kib, hours, minutes, seconds, bitrate = match.groups()
-                    try:
-                        size_kib = int(size_kib)
-                        hours, minutes, seconds = int(hours), int(minutes), int(seconds)
-                        size_gb = size_kib / (1024 ** 2)  # Convert KiB to GiB
-                        duration_str = f"{hours:02d}h {minutes:02d}m {seconds:02d}s"
-                        bitrate_float = float(bitrate)  # Convert bitrate string to float
-                        progress = f"size {size_gb:.2f}gb @ {duration_str} {bitrate_float:.0f}kb/s"
-                        print(f"\r{progress:<{len(last_progress)}}", end="", file=sys.stdout)
-                        sys.stdout.flush()
-                        last_progress = progress
-                    except ValueError as e:
-                        logging.warning(f"Invalid progress data: {line}. Error: {e}")
-                        continue
-                else:
-                    logging.debug(f"yt-dlp output: {line}")
-            if STOP_EVENT:
-                PROCESS.terminate()
-                logging.info("Recording stopped due to termination signal")
-                break
+            with open(cookies_file, 'r', encoding='utf-8') as f:
+                cookies_content = f.read().strip()
+                if not cookies_content or 'twitcasting.tv' not in cookies_content:
+                    logging.warning("Cookies file may be invalid or missing TwitCasting cookies.")
         except Exception as e:
-            logging.error(f"Error reading process output: {e}")
-            break
+            logging.warning(f"Failed to read cookies file: {e}")
+    else:
+        logging.warning("No cookies file found. Private streams may require authentication.")
     
-    end_time = time.time()
-    # Clear the last progress line
-    print(f"\r{' ' * len(last_progress)}", end="\r", file=sys.stdout)
-    sys.stdout.flush()
-    
-    # Handle process completion
-    try:
-        stdout, stderr = PROCESS.communicate(timeout=10)
-        for line in stdout.splitlines():
-            if line.strip():
-                logging.info(f"yt-dlp stdout: {line.strip()}")
-        for line in stderr.splitlines():
-            if line.strip():
-                logging.debug(f"yt-dlp stderr: {line.strip()}")
+    for attempt in range(1, max_retries + 1):
+        cmd = [
+            "yt-dlp",
+            "--hls-use-mpegts",
+            "--xattrs",
+            "--ignore-no-formats-error",
+            "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/101.0.4951.67 Safari/537.36",
+            "--cookies", str(cookies_file),
+            "--add-header", "Referer:https://twitcasting.tv/",
+            "--add-header", "Origin:https://twitcasting.tv/",
+            "--ffmpeg-location", shutil.which("ffmpeg"),
+            "--output", str(output_file),
+            "--progress",
+            "--hls-prefer-ffmpeg",
+            "--no-part",
+            "--postprocessor-args", "-movflags frag_keyframe+empty_moov -f mp4",
+            hls_url
+        ]
         
-        if PROCESS.returncode != 0:
-            logging.error(f"Recording failed with return code {PROCESS.returncode}: {stderr}")
-        elif output_file.exists():
-            size_bytes = output_file.stat().st_size
-            size_gib = size_bytes / (1024 ** 3)
-            duration = get_stream_duration(output_file)
-            if duration == 0:
-                duration = int(end_time - start_time)
-                logging.debug(f"Using elapsed time as duration: {duration} seconds")
-            duration_str = f"{duration//3600:02d}h {(duration%3600)//60:02d}m {duration%60:02d}s"
-            speed_kib_s = (size_bytes / 1024) / duration if duration > 0 else 0
-            logging.info(f"Recording completed Size: {size_gib:.2f} GiB ({duration_str} @ {speed_kib_s:.2f} KiB/s)")
-        else:
-            logging.warning(f"Recording file missing: {output_file}")
-    except subprocess.TimeoutExpired:
-        logging.warning("Recording process timed out during cleanup")
-        PROCESS.kill()
-    except Exception as e:
-        logging.error(f"Error during process cleanup: {e}")
-    finally:
-        PROCESS = None
-
-# Convert to MKV and embed metadata
-def convert_to_mkv(mp4_file, mkv_file, metadata, thumbnail_file):
-    cmd = [
-        "ffmpeg",
-        "-i", str(mp4_file),
-        "-c", "copy",
-        "-metadata", f"title={metadata['title']}",
-        "-metadata", f"artist={metadata['streamer']}",
-        "-metadata", f"date={metadata['date']}",
-        "-metadata", f"comment=Stream ID: {metadata['stream_id']}"
-    ]
-    if thumbnail_file and thumbnail_file.exists():
-        cmd.extend(["-attach", str(thumbnail_file), "-metadata:s:t", "mimetype=image/jpeg"])
-    cmd.append(str(mkv_file))
-    
-    try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
-        mp4_file.unlink()
-        if thumbnail_file and thumbnail_file.exists():
-            thumbnail_file.unlink()
-        logging.info(f"Converted to MKV: {mkv_file}")
-    except subprocess.SubprocessError as e:
-        logging.error(f"Conversion failed: {e}")
-        raise  # Raise exception to be handled by caller
+        try:
+            PROCESS = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+                universal_newlines=True
+            )
+        except subprocess.SubprocessError as e:
+            logging.error(f"Failed to start recording process (attempt {attempt}/{max_retries}): {e}")
+            if attempt < max_retries:
+                logging.info(f"Retrying in 5 seconds...")
+                time.sleep(5)
+            continue
+        
+        start_time = time.time()
+        last_progress = ""
+        last_update = 0
+        progress_re = re.compile(r"frame=\s*\d+\s+fps=\s*[\d.]+.*size=\s*(\d+)KiB\s+time=(\d{2}):(\d{2}):(\d{2})\.\d+\s+bitrate=\s*([\d.]+)kbits/s")
+        
+        while PROCESS.poll() is None:
+            try:
+                line = PROCESS.stderr.readline().strip()
+                if line:
+                    match = progress_re.search(line)
+                    if match:
+                        size_kib, hours, minutes, seconds, bitrate = match.groups()
+                        try:
+                            size_kib = int(size_kib)
+                            hours, minutes, seconds = int(hours), int(minutes), int(seconds)
+                            size_gb = size_kib / (1024 ** 2)
+                            duration_str = f"{hours:02d}h {minutes:02d}m {seconds:02d}s"
+                            bitrate_float = float(bitrate)
+                            progress = f"size {size_gb:.2f}GB @ {duration_str} {bitrate_float:.0f}KB/s"
+                            current_time = time.time()
+                            if current_time - last_update >= 5:  # Update every 5 seconds
+                                print(f"\r{progress:<{len(last_progress)}}", end="", file=sys.stdout)
+                                sys.stdout.flush()
+                                last_progress = progress
+                                last_update = current_time
+                        except ValueError as e:
+                            logging.debug(f"Invalid progress data: {line}. Error: {e}")
+                            continue
+                    else:
+                        logging.debug(f"yt-dlp output: {line}")  # Log non-progress output to file only
+                if STOP_EVENT:
+                    PROCESS.terminate()
+                    logging.info("Recording stopped due to termination signal")
+                    break
+            except Exception as e:
+                logging.error(f"Error reading process output (attempt {attempt}/{max_retries}): {e}")
+                break
+        
+        end_time = time.time()
+        print(f"\r{' ' * len(last_progress)}", end="\r", file=sys.stdout)
+        sys.stdout.flush()
+        
+        try:
+            stdout, stderr = PROCESS.communicate(timeout=30)
+            for line in stdout.splitlines():
+                if line.strip():
+                    logging.info(f"yt-dlp stdout: {line.strip()}")
+            for line in stderr.splitlines():
+                if line.strip():
+                    logging.debug(f"yt-dlp stderr: {line.strip()}")
+            
+            if PROCESS.returncode != 0:
+                logging.error(f"Recording failed with return code {PROCESS.returncode} (attempt {attempt}/{max_retries}): {stderr}")
+                if attempt < max_retries:
+                    logging.info(f"Retrying in 5 seconds...")
+                    time.sleep(5)
+                    continue
+            elif output_file.exists():
+                size_bytes = output_file.stat().st_size
+                size_gib = size_bytes / (1024 ** 3)
+                duration = get_stream_duration(output_file)
+                if duration == 0:
+                    duration = int(end_time - start_time)
+                    logging.debug(f"Using elapsed time as duration: {duration} seconds")
+                duration_str = f"{duration//3600:02d}h {(duration%3600)//60:02d}m {duration%60:02d}s"
+                speed_kib_s = (size_bytes / 1024) / duration if duration > 0 else 0
+                logging.info(f"Recording completed Size: {size_gib:.2f} GiB ({duration_str} @ {speed_kib_s:.2f} KiB/s)")
+                return  # Success, exit the function
+            else:
+                logging.warning(f"Recording file missing: {output_file}")
+                if attempt < max_retries:
+                    logging.info(f"Retrying in 5 seconds...")
+                    time.sleep(5)
+                    continue
+        except subprocess.TimeoutExpired:
+            logging.warning(f"Recording process timed out during cleanup (attempt {attempt}/{max_retries})")
+            PROCESS.kill()
+        except Exception as e:
+            logging.error(f"Error during process cleanup (attempt {attempt}/{max_retries}): {e}")
+        finally:
+            PROCESS = None
+        
+        if attempt == max_retries:
+            logging.error(f"Recording failed after {max_retries} attempts for {hls_url}")
 
 # Signal handler
 def signal_handler(sig, frame):
@@ -435,8 +446,7 @@ def main():
     
     cookies_file = SCRIPT_DIR / "cookies.txt"
     if not cookies_file.exists():
-        logging.error("Cookies file not found: cookies.txt")
-        sys.exit(1)
+        logging.warning("Cookies file not found: cookies.txt. Proceeding without cookies.")
     
     sanitized_streamer = sanitize_filename(streamer) if streamer else None
     save_folder = SCRIPT_DIR / sanitized_streamer if streamer else SCRIPT_DIR
@@ -450,63 +460,39 @@ def main():
         date = datetime.now().strftime("%Y-%m-%d")
         filename = f"{datetime.strptime(date, '%Y-%m-%d').strftime('[%Y%m%d]')}_Direct_Recording"
         mp4_file = get_unique_filename(save_folder / filename, ".mp4")
-        mkv_file = mp4_file.with_suffix(".mkv")
-        metadata = {
-            "title": "Direct Recording",
-            "streamer": "Unknown",
-            "date": date,
-            "stream_id": "direct"
-        }
         record_stream(args.hls_url, mp4_file, cookies_file, args.quality)
         if mp4_file.exists():
-            repair_mp4(mp4_file)
-            try:
-                convert_to_mkv(mp4_file, mkv_file, metadata, None)
-            except Exception as e:
-                logging.error(f"Conversion failed: {e}")
-                backup_folder = save_folder / "backup"
-                backup_folder.mkdir(exist_ok=True)
-                shutil.move(mp4_file, get_unique_filename(backup_folder / mp4_file.name, ".mp4"))
+            logging.info(f"Recording saved: {mp4_file}")
         sys.exit(0)
     
     logging.info(f"Monitoring streamer: {streamer}")
     
     while not STOP_EVENT:
-        is_live, hls_url = is_stream_live(streamer, cookies_file, retry_delay)
+        is_live, hls_url = check_stream_status(streamer, retry_delay, args.quality)
         if is_live and not STOP_EVENT:
             logging.info(f"Stream is live: {streamer}")
+            # Validate hls_url before proceeding
+            if not hls_url or not isinstance(hls_url, str):
+                logging.error(f"Invalid HLS URL received: {hls_url}. Skipping recording.")
+                time.sleep(check_interval)
+                continue
+            
             title, stream_id, thumbnail_url = fetch_metadata(streamer, hls_url)
             date = datetime.now().strftime("%Y-%m-%d")
             filename = generate_filename(title, streamer, stream_id, date)
             
             mp4_file = get_unique_filename(save_folder / filename, ".mp4")
-            mkv_file = mp4_file.with_suffix(".mkv")
             thumbnail_file = mp4_file.with_suffix(".jpg") if thumbnail_url else None
             
             if thumbnail_url:
                 download_thumbnail(thumbnail_url, thumbnail_file)
-            
-            metadata = {
-                "title": title,
-                "streamer": streamer,
-                "date": date,
-                "stream_id": stream_id
-            }
             
             record_stream(hls_url, mp4_file, cookies_file, args.quality)
             
             if mp4_file.exists():
                 size_bytes = mp4_file.stat().st_size
                 duration = get_stream_duration(mp4_file)
-                logging.info(f"Processing file: {mp4_file} ({size_bytes / 1024:.2f} KB, {duration}s)")
-                repair_mp4(mp4_file)
-                try:
-                    convert_to_mkv(mp4_file, mkv_file, metadata, thumbnail_file)
-                except Exception as e:
-                    logging.error(f"Conversion failed: {e}")
-                    backup_folder = save_folder / "backup"
-                    backup_folder.mkdir(exist_ok=True)
-                    shutil.move(mp4_file, get_unique_filename(backup_folder / mp4_file.name, ".mp4"))
+                logging.info(f"Recording saved: {mp4_file} ({size_bytes / 1024:.2f} KB, {duration}s)")
             else:
                 logging.warning(f"Recording file missing: {mp4_file}")
             
