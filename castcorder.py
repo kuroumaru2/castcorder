@@ -37,12 +37,10 @@ def setup_logging(debug, streamer=None):
     
     class StreamOfflineHandler(logging.StreamHandler):
         def emit(self, record):
-            if "Stream offline" in record.msg:
-                print(f"\r{self.format(record)}", end="", file=sys.stdout)
-                sys.stdout.flush()
-            else:
-                print(f"\n{self.format(record)}", file=sys.stdout)
-                sys.stdout.flush()
+            # Use standard newlines for non-progress messages
+            if "size" not in record.msg.lower():  # Skip progress messages
+                msg = self.format(record)
+                print(msg, file=sys.stdout, flush=True)  # Use newline, force flush
     
     logging.basicConfig(
         level=logging.DEBUG if debug else logging.INFO,
@@ -234,9 +232,11 @@ def get_unique_filename(base_path, ext):
         i += 1
 
 # Check if stream is live
-def check_stream_status(streamer, cookies_file, retry_delay, quality="best"):
-    logging.info(f"Checking stream status for {streamer}")
+def check_stream_status(streamer, cookies_file, retry_delay, quality="best", offline_counter=[0]):
+    logging.debug(f"Checking stream status for {streamer}")  # DEBUG to reduce INFO clutter
     time.sleep(random.uniform(0.5, 2.0))  # Random delay to avoid rate limiting
+    
+    failure_reason = ""
     
     # Try yt-dlp --get-url first
     cmd = [
@@ -253,16 +253,20 @@ def check_stream_status(streamer, cookies_file, retry_delay, quality="best"):
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if result.returncode == 0 and result.stdout.strip():
             logging.info(f"Stream is live via yt-dlp: {streamer}")
+            offline_counter[0] = 0  # Reset counter when stream is live
+            # Clear any existing offline message
+            print(f"\r{' ' * 120}\r", end="", file=sys.stdout, flush=True)
             return True, result.stdout.strip()
         if "401" in result.stderr or "unauthorized" in result.stderr.lower():
             logging.warning("Authentication error: Check cookies or credentials")
-        logging.info(f"yt-dlp stream check failed, falling back to API")
+            failure_reason = "yt-dlp (auth error)"
+        else:
+            failure_reason = "yt-dlp"
         logging.debug(f"yt-dlp stderr: {result.stderr}")
     except subprocess.SubprocessError as e:
-        logging.warning(f"yt-dlp stream check failed: {e}")
-        logging.info(f"Stream offline: {streamer}, retrying in {retry_delay} seconds")
-        return False, None
-
+        failure_reason = f"yt-dlp ({str(e)})"
+        logging.debug(f"yt-dlp stream check failed: {e}")
+    
     # Fallback to API
     api_url = f"https://twitcasting.tv/streamserver.php?target={streamer}&mode=client&player=pc_web"
     headers = {
@@ -297,15 +301,28 @@ def check_stream_status(streamer, cookies_file, retry_delay, quality="best"):
                 return False, None
         
         if is_live and hls_url:
-            logging.debug(f"Stream is live via API, HLS URL: {hls_url}")
+            logging.info(f"Stream is live via API, HLS URL: {hls_url}")
+            offline_counter[0] = 0  # Reset counter when stream is live
+            # Clear any existing offline message
+            print(f"\r{' ' * 120}\r", end="", file=sys.stdout, flush=True)
             return True, hls_url
         else:
-            logging.info(f"Stream offline via API: {streamer}, retrying in {retry_delay} seconds")
+            failure_reason = f"{failure_reason + '/' if failure_reason else ''}API"
+            offline_counter[0] += 1
+            msg = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S,%f')[:23]} [INFO] Stream offline ({failure_reason}): {streamer}, retrying in {retry_delay} seconds"
+            print(f"\r{msg}", end="", file=sys.stdout, flush=True)  # Update in place every check
+            if offline_counter[0] % 5 == 0:  # Log to file every 5th check to reduce file verbosity
+                logging.info(f"Stream offline ({failure_reason}): {streamer}, retrying in {retry_delay} seconds")
             return False, None
     except requests.RequestException as e:
-        logging.warning(f"API request failed: {e}")
+        failure_reason = f"{failure_reason + '/' if failure_reason else ''}API ({str(e)})"
+        logging.debug(f"API request failed: {e}")
         logging.debug(f"API response: {response.text if 'response' in locals() else 'No response'}")
-        logging.info(f"Stream offline: {streamer}, retrying in {retry_delay} seconds")
+        offline_counter[0] += 1
+        msg = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S,%f')[:23]} [INFO] Stream offline ({failure_reason}): {streamer}, retrying in {retry_delay} seconds"
+        print(f"\r{msg}", end="", file=sys.stdout, flush=True)  # Update in place every check
+        if offline_counter[0] % 5 == 0:  # Log to file every 5th check
+            logging.info(f"Stream offline ({failure_reason}): {streamer}, retrying in {retry_delay} seconds")
         return False, None
 
 # Get stream duration using ffprobe
@@ -357,8 +374,8 @@ def record_stream(hls_url, output_file, cookies_file, quality, private_stream_pa
             "--output", str(output_file),
             "--progress",
             "--hls-prefer-ffmpeg",
-            "--no-part",  # Avoid .part files for direct playback
-            "--postprocessor-args", "-movflags +frag_keyframe+empty_moov -f mp4",  # Enable playback during recording
+            "--no-part",
+            "--postprocessor-args", "-movflags +frag_keyframe+empty_moov -f mp4",
         ]
         if private_stream_password:
             cmd.extend(["--video-password", private_stream_password])
@@ -400,11 +417,11 @@ def record_stream(hls_url, output_file, cookies_file, quality, private_stream_pa
                             size_gb = size_kib / (1024 ** 2)
                             duration_str = f"{hours:02d}h {minutes:02d}m {seconds:02d}s"
                             bitrate_float = float(bitrate)
-                            progress = f"size {size_gb:.2f}GB @ {duration_str} {bitrate_float:.0f}KB/s"
+                            progress = f"Recording: size {size_gb:.2f}GB @ {duration_str} {bitrate_float:.0f}KB/s"
                             current_time = time.time()
-                            if current_time - last_update >= 5:
-                                print(f"\r{progress:<{len(last_progress)}}", end="", file=sys.stdout)
-                                sys.stdout.flush()
+                            if current_time - last_update >= 10:  # Slower updates
+                                print(f"\r{' ' * 120}", end="\r", file=sys.stdout, flush=True)
+                                print(f"\r{progress}", end="", file=sys.stdout, flush=True)
                                 last_progress = progress
                                 last_update = current_time
                         except ValueError as e:
@@ -421,7 +438,7 @@ def record_stream(hls_url, output_file, cookies_file, quality, private_stream_pa
                 break
         
         end_time = time.time()
-        print(f"\r{' ' * len(last_progress)}", end="\r", file=sys.stdout)
+        print(f"\r{' ' * 120}", end="\r", file=sys.stdout, flush=True)
         sys.stdout.flush()
         
         try:
@@ -488,6 +505,8 @@ def signal_handler(sig, frame):
                 PROCESS.kill()
             except subprocess.SubprocessError:
                 pass
+    print(f"\r{' ' * 120}\r", end="", file=sys.stdout, flush=True)
+    sys.stdout.flush()
     sys.exit(0)
 
 # Main function
