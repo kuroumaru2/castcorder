@@ -35,7 +35,7 @@ def setup_logging(debug, streamer=None):
     logs_folder.mkdir(parents=True, exist_ok=True)
     
     sanitized_streamer = sanitize_filename(streamer) if streamer else None
-    log_file = logs_folder / (f"twitcast_recorder_direct.log" if not streamer else f"twitcast_recorder_{sanitized_streamer}.log")
+    log_file = logs_folder / (f"castcorder_direct.log" if not streamer else f"castcorder_{sanitized_streamer}.log")
     
     class StreamOfflineHandler(logging.StreamHandler):
         def emit(self, record):
@@ -319,17 +319,19 @@ def generate_filename(title, streamer, stream_id, date):
     filename = f"{formatted_date} {title} [{streamer}] [{stream_id}]"
     return filename[:255]
 
-# Get unique filename
+# Enhanced function to get unique filename with timestamp
 def get_unique_filename(base_path, ext):
     path = base_path.with_suffix(ext)
     if not path.exists():
         return path
-    i = 2
-    while True:
-        new_path = base_path.with_name(f"{base_path.stem}_{i}{ext}")
-        if not new_path.exists():
-            return new_path
-        i += 1
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base_name = f"{base_path.stem}_{timestamp}"
+    new_path = base_path.with_name(f"{base_name}{ext}")
+    counter = 2
+    while new_path.exists():
+        new_path = base_path.with_name(f"{base_name}_{counter}{ext}")
+        counter += 1
+    return new_path
 
 # Get stream duration using ffprobe
 def get_stream_duration(file_path, retries=3, delay=1):
@@ -345,8 +347,28 @@ def get_stream_duration(file_path, retries=3, delay=1):
     logging.warning(f"Failed to parse duration for {file_path} after {retries} attempts")
     return 0
 
+# Validate recorded file
+def validate_recording(file_path, min_duration=5, min_size_mb=0.1):
+    try:
+        if not file_path.exists():
+            return False, "File does not exist"
+        
+        # Check file size
+        size_mb = file_path.stat().st_size / (1024 * 1024)
+        if size_mb < min_size_mb:
+            return False, f"File size too small: {size_mb:.2f}MB"
+        
+        # Check duration
+        duration = get_stream_duration(file_path)
+        if duration < min_duration:
+            return False, f"File duration too short: {duration}s"
+        
+        return True, "File valid"
+    except Exception as e:
+        return False, f"Validation error: {str(e)}"
+
 # Record stream
-def record_stream(hls_url, output_file, cookies_file, quality):
+def record_stream(hls_url, output_file, cookies_file, quality, streamer=None, max_retries=3, retry_delay=10):
     global PROCESS, STOP_EVENT
     logging.info(f"Recording HLS URL: {hls_url}")
     logging.info(f"Writing File {output_file.name}")
@@ -366,95 +388,162 @@ def record_stream(hls_url, output_file, cookies_file, quality):
         "--progress",
         "--hls-prefer-ffmpeg",
         "--no-part",
-        "--postprocessor-args", "-movflags frag_keyframe+empty_moov -f mp4",
+        "--postprocessor-args", "-movflags frag_keyframe+empty_moov+faststart -f mp4",
         hls_url
     ]
     
-    try:
-        PROCESS = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            bufsize=1,
-            universal_newlines=True
-        )
-    except subprocess.SubprocessError as e:
-        logging.error(f"Failed to start recording process: {e}")
-        PROCESS = None
-        return
-    
+    retry_count = 0
     start_time = time.time()
     last_progress = ""
     progress_re = re.compile(r"frame=\s*\d+\s+fps=\s*[\d.]+.*size=\s*(\d+)KiB\s+time=(\d{2}):(\d{2}):(\d{2})\.\d+\s+bitrate=\s*([\d.]+)kbits/s")
+    last_size_kib = 0
+    last_update_time = start_time
+    max_stall_time = 300  # 5 minutes without progress
     
-    while PROCESS.poll() is None:
+    while not STOP_EVENT and retry_count < max_retries:
         try:
-            line = PROCESS.stderr.readline().strip()
-            if line:
-                match = progress_re.search(line)
-                if match:
-                    size_kib, hours, minutes, seconds, bitrate = match.groups()
-                    try:
-                        size_kib = int(size_kib)
-                        hours, minutes, seconds = int(hours), int(minutes), int(seconds)
-                        size_gb = size_kib / (1024 ** 2)
-                        duration_str = f"{hours:02d}h {minutes:02d}m {seconds:02d}s"
-                        bitrate_float = float(bitrate)
-                        progress = f"size {size_gb:.2f}gb @ {duration_str} {bitrate_float:.0f}kb/s"
-                        print(f"\r{progress:<{len(last_progress)}}", end="", file=sys.stdout)
-                        sys.stdout.flush()
-                        last_progress = progress
-                    except ValueError as e:
-                        logging.warning(f"Invalid progress data: {line}. Error: {e}")
-                        continue
-                else:
-                    logging.debug(f"yt-dlp output: {line}")
-            if STOP_EVENT:
-                logging.info("Termination signal received, stopping recording gracefully...")
-                PROCESS.terminate()
+            PROCESS = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+                universal_newlines=True
+            )
+        except subprocess.SubprocessError as e:
+            logging.error(f"Failed to start recording process: {e}")
+            PROCESS = None
+            return
+        
+        while PROCESS.poll() is None:
+            try:
+                line = PROCESS.stderr.readline().strip()
+                if line:
+                    match = progress_re.search(line)
+                    if match:
+                        size_kib, hours, minutes, seconds, bitrate = match.groups()
+                        try:
+                            size_kib = int(size_kib)
+                            hours, minutes, seconds = int(hours), int(minutes), int(seconds)
+                            size_gb = size_kib / (1024 ** 2)
+                            duration = hours * 3600 + minutes * 60 + seconds
+                            duration_str = f"{hours:02d}h {minutes:02d}m {seconds:02d}s"
+                            bitrate_float = float(bitrate)
+                            progress = f"size {size_gb:.2f}gb @ {duration_str} {bitrate_float:.0f}kb/s"
+                            print(f"\r{progress:<{len(last_progress)}}", end="", file=sys.stdout)
+                            sys.stdout.flush()
+                            last_progress = progress
+                            
+                            if size_kib > last_size_kib:
+                                last_size_kib = size_kib
+                                last_update_time = time.time()
+                            elif time.time() - last_update_time > max_stall_time:
+                                logging.warning("Recording stalled, restarting...")
+                                PROCESS.terminate()
+                                try:
+                                    PROCESS.wait(timeout=10)
+                                except subprocess.TimeoutExpired:
+                                    PROCESS.kill()
+                                break
+                        except ValueError as e:
+                            logging.warning(f"Invalid progress data: {line}. Error: {e}")
+                            continue
+                    else:
+                        logging.debug(f"yt-dlp output: {line}")
+                if STOP_EVENT:
+                    logging.info("Termination signal received, stopping recording gracefully...")
+                    PROCESS.terminate()
+                    break
+                time.sleep(0.1)
+            except Exception as e:
+                logging.error(f"Error reading process output: {e}")
                 break
+        
+        end_time = time.time()
+        print(f"\r{' ' * len(last_progress)}", end="\r", file=sys.stdout)
+        sys.stdout.flush()
+        
+        try:
+            stdout, stderr = PROCESS.communicate(timeout=30)
+            for line in stdout.splitlines():
+                if line.strip():
+                    logging.info(f"yt-dlp stdout: {line.strip()}")
+            for line in stderr.splitlines():
+                if line.strip():
+                    logging.debug(f"yt-dlp stderr: {line.strip()}")
+            
+            # Debug file existence and size
+            if output_file.exists():
+                size_bytes = output_file.stat().st_size
+                logging.info(f"File exists after download: {output_file}, Size: {size_bytes / 1024:.2f} KiB")
+            else:
+                logging.warning(f"File does not exist after download: {output_file}")
+            
+            if PROCESS.returncode != 0:
+                logging.error(f"Recording failed with return code {PROCESS.returncode}: {stderr}")
+            
+            # Validate the recording
+            if output_file.exists():
+                is_valid, reason = validate_recording(output_file, min_duration=5, min_size_mb=0.1)
+                if is_valid:
+                    size_bytes = output_file.stat().st_size
+                    size_gib = size_bytes / (1024 ** 3)
+                    duration = get_stream_duration(output_file)
+                    if duration == 0:
+                        duration = int(end_time - start_time)
+                        logging.debug(f"Using elapsed time as duration: {duration} seconds")
+                    duration_str = f"{duration//3600:02d}h {(duration%3600)//60:02d}m {duration%60:02d}s"
+                    speed_kib_s = (size_bytes / 1024) / duration if duration > 0 else 0
+                    logging.info(f"Recording completed Size: {size_gib:.2f} GiB ({duration_str} @ {speed_kib_s:.2f} KiB/s)")
+                    logging.info(f"File saved as: {output_file}")
+                    break
+                else:
+                    logging.warning(f"Invalid recording: {reason}")
+                    output_file.unlink(missing_ok=True)
+                    retry_count += 1
+                    if retry_count < max_retries and not STOP_EVENT:
+                        logging.info(f"Retrying recording ({retry_count}/{max_retries})...")
+                        # Check if stream is still live
+                        if streamer:
+                            is_live, new_hls_url = is_stream_live(streamer, cookies_file, retry_delay, quality)
+                            if not is_live:
+                                logging.info("Stream is no longer live, stopping retries.")
+                                break
+                            hls_url = new_hls_url
+                        time.sleep(retry_delay)
+                        output_file = get_unique_filename(output_file.with_suffix(''), ".mp4")
+                        logging.info(f"New output file: {output_file}")
+                        continue
+            else:
+                logging.warning(f"Recording file missing: {output_file}")
+                retry_count += 1
+                if retry_count < max_retries and not STOP_EVENT:
+                    logging.info(f"Retrying recording ({retry_count}/{max_retries})...")
+                    # Check if stream is still live
+                    if streamer:
+                        is_live, new_hls_url = is_stream_live(streamer, cookies_file, retry_delay, quality)
+                        if not is_live:
+                            logging.info("Stream is no longer live, stopping retries.")
+                            break
+                        hls_url = new_hls_url
+                    time.sleep(retry_delay)
+                    output_file = get_unique_filename(output_file.with_suffix(''), ".mp4")
+                    logging.info(f"New output file: {output_file}")
+                    continue
+        except subprocess.TimeoutExpired:
+            logging.warning("Recording process timed out during cleanup")
+            PROCESS.kill()
         except Exception as e:
-            logging.error(f"Error reading process output: {e}")
+            logging.error(f"Error during process cleanup: {e}")
+        finally:
+            PROCESS = None
+        if STOP_EVENT:
             break
     
-    end_time = time.time()
-    print(f"\r{' ' * len(last_progress)}", end="\r", file=sys.stdout)
-    sys.stdout.flush()
-    
-    try:
-        stdout, stderr = PROCESS.communicate(timeout=30)
-        for line in stdout.splitlines():
-            if line.strip():
-                logging.info(f"yt-dlp stdout: {line.strip()}")
-        for line in stderr.splitlines():
-            if line.strip():
-                logging.debug(f"yt-dlp stderr: {line.strip()}")
-        
-        if PROCESS.returncode != 0:
-            logging.error(f"Recording failed with return code {PROCESS.returncode}: {stderr}")
-        elif output_file.exists():
-            size_bytes = output_file.stat().st_size
-            size_gib = size_bytes / (1024 ** 3)
-            duration = get_stream_duration(output_file)
-            if duration == 0:
-                duration = int(end_time - start_time)
-                logging.debug(f"Using elapsed time as duration: {duration} seconds")
-            duration_str = f"{duration//3600:02d}h {(duration%3600)//60:02d}m {duration%60:02d}s"
-            speed_kib_s = (size_bytes / 1024) / duration if duration > 0 else 0
-            logging.info(f"Recording completed Size: {size_gib:.2f} GiB ({duration_str} @ {speed_kib_s:.2f} KiB/s)")
-            logging.info(f"File saved as: {output_file}")
-        else:
-            logging.warning(f"Recording file missing: {output_file}")
-    except subprocess.TimeoutExpired:
-        logging.warning("Recording process timed out during cleanup")
-        PROCESS.kill()
-    except Exception as e:
-        logging.error(f"Error during process cleanup: {e}")
-    finally:
-        PROCESS = None
+    if retry_count >= max_retries:
+        logging.error(f"Max retries ({max_retries}) reached, giving up on recording.")
 
 # Signal handler
 def signal_handler(sig, frame):
@@ -463,7 +552,6 @@ def signal_handler(sig, frame):
         return
     STOP_EVENT = True
     logging.info("Termination signal received. Waiting for recording to complete...")
-    # Do not terminate PROCESS here; let record_stream handle it
 
 # Main function
 def main():
@@ -497,8 +585,8 @@ def main():
         date = datetime.now().strftime("%Y-%m-%d")
         filename = f"{datetime.strptime(date, '%Y-%m-%d').strftime('[%Y%m%d]')}_Direct_Recording"
         mp4_file = get_unique_filename(save_folder / filename, ".mp4")
-        logging.info(f"writing file {mp4_file.name}")
-        record_stream(args.hls_url, mp4_file, cookies_file, args.quality)
+        logging.info(f"Writing file {mp4_file.name}")
+        record_stream(args.hls_url, mp4_file, cookies_file, args.quality, streamer=streamer)
         if mp4_file.exists():
             logging.info(f"File saved as: {mp4_file}")
         if STOP_EVENT and not args.fast_exit:
@@ -522,7 +610,7 @@ def main():
             if thumbnail_url:
                 download_thumbnail(thumbnail_url, thumbnail_file)
             
-            record_stream(hls_url, mp4_file, cookies_file, args.quality)
+            record_stream(hls_url, mp4_file, cookies_file, args.quality, streamer=streamer)
             
             if mp4_file.exists():
                 size_bytes = mp4_file.stat().st_size
