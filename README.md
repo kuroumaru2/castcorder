@@ -1,67 +1,79 @@
-# Castcorder
+## CastCorder - TwitCasting Stream Recorder
 
-A Python script to record live streams from TwitCasting, with support for automatic stream detection, HLS recording, metadata embedding, and thumbnail downloading. This script monitors a specified TwitCasting streamer's channel, detects when the stream goes live, and records it to a local file in MKV format with embedded metadata and optional thumbnails. It uses `yt-dlp`, `ffmpeg`, and `ffprobe` for stream fetching, processing, and analysis, with robust error handling and logging.
+A Python script to record live streams from TwitCasting, with support for automatic stream detection, HLS recording, and thumbnail downloading. This script monitors a specified TwitCasting streamer's channel, detects when the stream goes live, and records it to a local file in .ts format. It uses `yt-dlp`, and  `ffmpeg`, for stream fetching, processing, with robust error handling and logging.
+
+Features include:
+- Continuously monitors a TwitCasting streamer's channel and starts recording when the stream is live.
+- Records streams using HLS URLs fetched via `yt-dlp` or provided manually.
+- Support for authentication (cookies)
+- Downloads stream thumbnails.
+- Handles network issues, process termination, and file cleanup gracefully.
+- Supports command-line arguments for streamer selection, quality, and more.
+- Detailed logging to both file and console for debugging and monitoring.
+- Ensures sufficient disk space before recording (minimum 5 GB).
+- Gracefully handles interruptions (Ctrl+C) with optional fast-exit mode.
 
 ## Features
-- **Automatic Stream Detection**: Continuously monitors a TwitCasting streamer's channel and starts recording when the stream is live.
-- **HLS Recording**: Records streams using HLS URLs fetched via `yt-dlp` or provided manually.
-- **Metadata Embedding**: Adds stream title, streamer name, date, and stream ID to the recorded file.
-- **Thumbnail Support**: Optionally downloads and attaches stream thumbnails to the output MKV file.
-- **Progress Monitoring**: Displays real-time recording progress with file size, duration, and bitrate.
-- **Robust Error Handling**: Handles network issues, process termination, and file cleanup gracefully.
-- **Configurable Options**: Supports command-line arguments for streamer selection, quality, and more.
-- **Logging**: Detailed logging to both file and console for debugging and monitoring.
-- **Disk Space Check**: Ensures sufficient disk space before recording (minimum 5 GB).
-- **Signal Handling**: Gracefully handles interruptions (Ctrl+C) with optional fast-exit mode.
 
-## Prerequisites
-Before running the script, ensure the following dependencies are installed:
+- Monitors single streamer or selects from `streamers.txt`
+- Two detection methods: **yt-dlp** `--get-url` + **TwitCasting streamserver API**
+- Saves recordings as `.ts` files (MPEG-TS container)
+- Downloads stream thumbnail as `.jpg`
+- Validates recorded files (minimum size + duration)
+- Retries failed/short recordings
+- Progress monitoring (file size, estimated duration, speed)
+- Configurable check interval & retry delay via `config.ini`
+- Supports private streams via `--video-password`
+- Cookie-based login (supports `tc_ss` session cookie)
 
-## Required Software
-1. **Python 3.6+**: The script requires a compatible Python version.
-2. **FFmpeg**: For recording, repairing, converting streams to MKV, and analyzing stream duration (includes `ffmpeg` and `ffprobe`).
-   - Ubuntu/Debian:
+## Requirements
 
-         sudo apt-get install ffmpeg
-         sudo apt-get install ffprobe
-     
-   - macOS (Homebrew):
+### Software
 
-         brew install ffmpeg
-     
-   - Windows: Download from [FFmpeg website](https://ffmpeg.org/download.html) and add to PATH.
-3. **yt-dlp**: For fetching HLS URLs and recording streams.
+- Python 3.8+
+- ffmpeg (must be in PATH)
+- yt-dlp (must be in PATH)
 
-         pip install yt-dlp
-   
-## Python Dependencies
-requests: For fetching stream metadata and thumbnails.
+### Optional but strongly recommended
 
-         pip install requests
-
-beautifulsoup4: For parsing stream metadata from TwitCasting pages.
-
-         pip install beautifulsoup4
-
-psutil (optional): Enhances process termination handling.
-
-         pip install psutil
+- `cookies.txt` – Netscape-format cookies file with valid TwitCasting login  
+  (especially needed for members-only / password-protected / age-restricted streams)
 
 ## Installation
-Clone or download this repository:
 
-         git clone https://github.com/kuroumaru2/castcorder.git
-         
+1. Clone the repository
+   
+         git clone https://github.com/YOUR-USERNAME/castcorder.git
          cd castcorder
+2. Install dependencies (ffmpeg + yt-dlp)
 
-Install Python dependencies:
+**Windows**
+ffmpeg: https://ffmpeg.org/download.html or use package manager (choco, scoop)
+yt-dlp: winget install yt-dlp or download from https://github.com/yt-dlp/yt-dlp/releases
 
-         pip install -r requirements.txt
-       
-Ensure ffmpeg, ffprobe, and yt-dlp are installed and accessible in your system PATH.
+**Linux/macOS**
 
+         sudo apt update
+         sudo apt install ffmpeg
+**Install latest yt-dlp**
+
+         sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+         sudo chmod a+rx /usr/local/bin/yt-dlp
+3. (Recommended) Create virtual environment
+
+         python -m venv venv
+**Linux/macOS**
+
+         source venv/bin/activate
+         
+**Windows**
+        
+         venv\Scripts\activate       
+4. Install Python dependencies
+
+         pip install requests beautifulsoup4
 ## Usage
-Run the script from the command line with optional arguments to customize its behavior.
+Run the script from the command line/terminal with optional arguments to customize its behavior.
 Basic Command
          
          python castcorder.py
@@ -132,11 +144,9 @@ If --streamer is not provided, the script prompts to select a streamer from this
 A cookies.txt file is required in the script directory for authenticated streams.
 
 ## Output
-1. Recordings: Saved in [script_directory]/[streamer_name]/ as MKV files.
-2. Filename Format: [<YYYYMMDD>] <title> [<username>][stream_id].mkv
-3. Thumbnails: Attached to MKV files if available.
-4. Log File: Saved as [script_directory]/[streamer_name]/twitcast_recorder_[streamer_name].log or twitcast_recorder_direct.log for direct HLS recordings.
-5. Backup Files: Incomplete or failed files are moved to [script_directory]/[streamer_name]/backup/.
+1. Recordings: Saved in [script_directory]/[streamer_name]/ as TS files.
+2. Filename Format: [<YYYYMMDD>] <title> [<username>][stream_id].TS
+3. Log File: Saved as [script_directory]/[streamer_name]/castcorder_[streamer_name].log or castcorder_direct.log for direct HLS recordings.
 
 ## Notes
 1. Ensure streamers.txt exists and is not empty if using the streamers file.
@@ -160,9 +170,8 @@ A cookies.txt file is required in the script directory for authenticated streams
 5. "Cookies file not found": Ensure cookies.txt exists in the script directory.
 6. "Insufficient disk space": Free up at least 5 GB in the save directory.
 7. "Login failed": Verify TWITCASTING_USERNAME, TWITCASTING_PASSWORD, or cookies.txt.
-8. HLS URL fetch fails: Check internet connection, cookies, or provide a manual --hls-url.
-9. Script hangs: Enable --debug and check the log file for details.
-10. Duration parsing errors: Ensure ffprobe is installed and accessible.
+8. "HLS URL fetch fails": Check internet connection, cookies, or provide a manual --hls-url.
+9. "Script hangs": Enable --debug and check the log file for details.
 
 ## License
 This project is licensed under the MIT License. See LICENSE for details.
@@ -171,5 +180,5 @@ This project is licensed under the MIT License. See LICENSE for details.
 Contributions are welcome! Submit issues or pull requests on GitHub.
 
 ## Acknowledgments
-Built with yt-dlp, ffmpeg, ffprobe, requests, beautifulsoup4, and psutil.
+Built with yt-dlp, ffmpeg, requests, beautifulsoup4, and psutil.
 Inspired by the need to reliably archive TwitCasting streams.
