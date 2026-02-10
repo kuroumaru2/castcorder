@@ -361,7 +361,11 @@ def record_stream(hls_url, output_file, cookies_file, quality, streamer=None, ma
     
     retry_count = 0
     start_time = time.time()
-    output_path = Path(output_file)
+    last_progress = ""
+    progress_re = re.compile(r"frame=\s*\d+\s+fps=\s*[\d.]+.*size=\s*(\d+)kB\s+time=(\d{2}):(\d{2}):(\d{2})\.\d+\s+bitrate=\s*([\d.]+)kbits/s")
+    last_size_kib = 0
+    last_update_time = start_time
+    max_stall_time = 300
     
     while not STOP_EVENT and retry_count < max_retries:
         try:
@@ -380,60 +384,57 @@ def record_stream(hls_url, output_file, cookies_file, quality, streamer=None, ma
             PROCESS = None
             return
         
-        last_size_bytes = 0
-        last_update_time = start_time
-        print("\nRecording progress (file size monitoring):")
-        
         while PROCESS.poll() is None:
             try:
-                current_time = time.time()
-                
-                if output_path.exists():
-                    try:
-                        current_size_bytes = output_path.stat().st_size
-                        size_mb = current_size_bytes / (1024 * 1024)
-                        size_gb = current_size_bytes / (1024 ** 3)
-                        
-                        elapsed = current_time - start_time
-                        hours = int(elapsed // 3600)
-                        minutes = int((elapsed % 3600) // 60)
-                        seconds = int(elapsed % 60)
-                        duration_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-                        
-                        if current_time - last_update_time >= 1.0:  # update every ~1 second
-                            if current_size_bytes > last_size_bytes:
-                                delta_bytes = current_size_bytes - last_size_bytes
-                                delta_time = current_time - last_update_time
-                                speed_mib_s = (delta_bytes / (1024 * 1024)) / delta_time
-                                
-                                progress = (
-                                    f"Size: {size_gb:.2f} GB   "
-                                    f"Duration: {duration_str}   "
-                                    f"Speed: {speed_mib_s:.2f} MiB/s"
-                                )
-                            else:
-                                progress = f"Size: {size_gb:.2f} GB   Duration: {duration_str}   (no growth)"
+                line = PROCESS.stderr.readline().strip()
+                if line:
+                    match = progress_re.search(line)
+                    if match:
+                        size_kib, hours, minutes, seconds, bitrate = match.groups()
+                        try:
+                            size_kib = int(size_kib)
+                            hours, minutes, seconds = int(hours), int(minutes), int(seconds)
+                            size_gb = size_kib / (1024 ** 2)
+                            duration = hours * 3600 + minutes * 60 + seconds
+                            duration_str = f"{hours:02d}h {minutes:02d}m {seconds:02d}s"
+                            bitrate_float = float(bitrate)
+                            progress = f"size {size_gb:.2f}gb @ {duration_str} {bitrate_float:.0f}kb/s"
+                            print(f"\r{progress:<{len(last_progress)}}", end="", file=sys.stdout)
+                            sys.stdout.flush()
+                            last_progress = progress
                             
-                            print(f"\r{progress:<80}", end="", flush=True)
-                            last_size_bytes = current_size_bytes
-                            last_update_time = current_time
-                    except Exception:
-                        # File might be locked or not yet fully written
-                        pass
-                
+                            if output_file.exists():
+                                disk_size_kib = output_file.stat().st_size / 1024
+                                if disk_size_kib > last_size_kib:
+                                    last_size_kib = disk_size_kib
+                                    last_update_time = time.time()
+                                elif time.time() - last_update_time > max_stall_time:
+                                    logging.warning("Recording stalled, restarting...")
+                                    PROCESS.terminate()
+                                    try:
+                                        PROCESS.wait(timeout=10)
+                                    except subprocess.TimeoutExpired:
+                                        PROCESS.kill()
+                                    break
+                            else:
+                                logging.debug("Output file not yet created")
+                        except ValueError as e:
+                            logging.warning(f"Invalid progress data: {line}. Error: {e}")
+                            continue
+                    else:
+                        logging.debug(f"yt-dlp output: {line}")
                 if STOP_EVENT:
                     logging.info("Termination signal received, stopping recording...")
                     PROCESS.terminate()
                     break
-                
-                time.sleep(0.3)  # ~3 checks per second
-                
+                time.sleep(0.1)
             except Exception as e:
-                logging.error(f"Error during progress monitoring: {e}")
+                logging.error(f"Error reading process output: {e}")
                 break
         
-        # Clear the progress line
-        print("\r" + " " * 80 + "\r", end="", flush=True)
+        end_time = time.time()
+        print(f"\r{' ' * len(last_progress)}", end="\r", file=sys.stdout)
+        sys.stdout.flush()
         
         try:
             stdout, stderr = PROCESS.communicate(timeout=30)
@@ -451,7 +452,7 @@ def record_stream(hls_url, output_file, cookies_file, quality, streamer=None, ma
                 logging.warning(f"File does not exist after download: {output_file}")
             
             if PROCESS.returncode != 0:
-                logging.error(f"Recording failed with return code {PROCESS.returncode}")
+                logging.error(f"Recording failed with return code {PROCESS.returncode}: {stderr}")
             
             if output_file.exists():
                 is_valid, reason = validate_recording(output_file, min_duration=5, min_size_mb=0.1)
@@ -460,7 +461,7 @@ def record_stream(hls_url, output_file, cookies_file, quality, streamer=None, ma
                     size_gib = size_bytes / (1024 ** 3)
                     duration = get_stream_duration(output_file)
                     if duration == 0:
-                        duration = int(time.time() - start_time)
+                        duration = int(end_time - start_time)
                         logging.debug(f"Using elapsed time as duration: {duration} seconds")
                     duration_str = f"{duration//3600:02d}h {(duration%3600)//60:02d}m {duration%60:02d}s"
                     speed_kib_s = (size_bytes / 1024) / duration if duration > 0 else 0
