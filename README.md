@@ -62,13 +62,14 @@ yt-dlp: winget install yt-dlp or download from https://github.com/yt-dlp/yt-dlp/
 3. (Recommended) Create virtual environment
 
          python -m venv venv
+   
 **Linux/macOS**
 
          source venv/bin/activate
          
 **Windows**
         
-         venv\Scripts\activate       
+         venv\Scripts\activate
 4. Install Python dependencies
 
         pip install requests beautifulsoup4
