@@ -13,23 +13,20 @@ from datetime import datetime
 from pathlib import Path
 import requests
 from bs4 import BeautifulSoup
-import psutil
 import configparser
-import json
 import random
+import http.cookiejar
 
 # Global variables
 STOP_EVENT = False
 PROCESS = None
-SCRIPT_DIR = Path(__file__).parent  # Directory of the script
-INITIAL_AUTH_LOGGED = {"tc_ss": False, "api": False}  # Track initial authentication logs
+SCRIPT_DIR = Path(__file__).parent
+INITIAL_AUTH_LOGGED = {"tc_ss": False, "api": False}
 
-# Sanitize filename for file system compatibility
 def sanitize_filename(name):
     invalid_chars = r'[<>:"/\\|?*]'
     return re.sub(invalid_chars, "_", name)
 
-# Setup logging
 def setup_logging(debug, streamer=None):
     logs_folder = SCRIPT_DIR / "logs"
     logs_folder.mkdir(parents=True, exist_ok=True)
@@ -41,12 +38,11 @@ def setup_logging(debug, streamer=None):
         def emit(self, record):
             try:
                 msg = self.format(record)
-                # Clear the line and move cursor to start
-                sys.stdout.write("\r\033[K")  # \033[K clears the line from cursor to end
+                sys.stdout.write("\r\033[K")
                 sys.stdout.write(msg)
                 sys.stdout.flush()
                 if "Stream offline" not in msg:
-                    sys.stdout.write("\n")  # Add newline for non-offline messages
+                    sys.stdout.write("\n")
             except Exception as e:
                 self.handleError(record)
     
@@ -61,7 +57,6 @@ def setup_logging(debug, streamer=None):
     )
     logging.info(f"Logging initialized to {log_file}")
 
-# Check dependencies
 def check_dependencies():
     required = ["ffmpeg", "yt-dlp"]
     missing = []
@@ -71,12 +66,7 @@ def check_dependencies():
     if missing:
         logging.error(f"Missing dependencies: {', '.join(missing)}")
         sys.exit(1)
-    try:
-        import psutil
-    except ImportError:
-        logging.warning("Optional dependency 'psutil' missing. Some features may be limited.")
 
-# Load configuration
 def load_config(config_file):
     config = configparser.ConfigParser()
     config.read(config_file, encoding='utf-8')
@@ -92,25 +82,22 @@ def load_config(config_file):
         defaults.update(config["recorder"])
     return defaults
 
-# Parse arguments
 def parse_args():
     parser = argparse.ArgumentParser(description="TwitCasting Stream Recorder")
     parser.add_argument("--streamer", help="Streamer username")
     parser.add_argument("--quality", default="best", help="Stream quality (best, high, medium, low)")
-    parser.add_argument("--streamers-file", type=Path, default=SCRIPT_DIR / "streamers.txt", help="File containing streamer usernames")
-    parser.add_argument("--debug", action="store_true", help="Enable verbose logging")
-    parser.add_argument("--fast-exit", action="store_true", help="Skip cleanup on exit")
+    parser.add_argument("--streamers-file", type=Path, default=SCRIPT_DIR / "streamers.txt")
+    parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--fast-exit", action="store_true")
     parser.add_argument("--hls-url", help="Direct HLS URL to record")
     return parser.parse_args()
 
-# Validate streamer username
 def validate_streamer(streamer):
     if not re.match(r"^[a-zA-Z0-9_:]+$", streamer):
         logging.error(f"Invalid streamer username: {streamer}")
         sys.exit(1)
     return streamer
 
-# Select streamer
 def select_streamer(args, streamers_file):
     if args.streamer:
         return validate_streamer(args.streamer)
@@ -136,7 +123,6 @@ def select_streamer(args, streamers_file):
         except ValueError:
             print("Enter a valid number.")
 
-# Check disk space
 def check_disk_space(save_folder, min_space_gb=5):
     total, used, free = shutil.disk_usage(save_folder)
     free_gb = free / (1024 ** 3)
@@ -144,7 +130,6 @@ def check_disk_space(save_folder, min_space_gb=5):
         logging.error(f"Insufficient disk space: {free_gb:.2f} GB available, {min_space_gb} GB required")
         sys.exit(1)
 
-# Parse cookies from cookies.txt
 def parse_cookies(cookies_file):
     cookies = {}
     try:
@@ -160,31 +145,33 @@ def parse_cookies(cookies_file):
             logging.info("Authentication successful: tc_ss cookie found")
             INITIAL_AUTH_LOGGED["tc_ss"] = True
         elif 'tc_ss' not in cookies and not INITIAL_AUTH_LOGGED["tc_ss"]:
-            logging.warning("Cookies file does not contain tc_ss cookie, private streams may fail")
-            INITIAL_AUTH_LOGGED["tc_ss"] = True  # Prevent repeated warnings
+            logging.warning("Cookies file does not contain tc_ss cookie")
+            INITIAL_AUTH_LOGGED["tc_ss"] = True
         return cookies
     except Exception as e:
         logging.error(f"Failed to parse cookies file: {e}")
         return {}
 
-# Check if stream is live using yt-dlp and TwitCasting API
 def is_stream_live(streamer, cookies_file, retry_delay, quality="best", offline_counter=[0]):
     logging.debug(f"Checking stream status for {streamer}")
-    time.sleep(random.uniform(0.5, 2.0))  # Random delay to avoid rate limiting
+    time.sleep(random.uniform(0.5, 2.0))
     
     failure_reason = ""
-    
-    # Try yt-dlp --get-url first
     cmd = [
         "yt-dlp",
         "--get-url",
         "--hls-use-mpegts",
+        "--hls-prefer-ffmpeg",
         "--cookies", str(cookies_file),
         "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
         "--add-header", "Referer:https://twitcasting.tv/",
         "--add-header", "Origin:https://twitcasting.tv/",
         f"https://twitcasting.tv/{streamer}"
     ]
+    config = load_config(SCRIPT_DIR / "config.ini")
+    if config.get("private_stream_password"):
+        cmd.extend(["--video-password", config["private_stream_password"]])
+    
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         if result.returncode == 0 and result.stdout.strip():
@@ -192,19 +179,14 @@ def is_stream_live(streamer, cookies_file, retry_delay, quality="best", offline_
             if not INITIAL_AUTH_LOGGED["tc_ss"]:
                 logging.info("Authentication successful: Valid response from yt-dlp")
                 INITIAL_AUTH_LOGGED["tc_ss"] = True
-            offline_counter[0] = 0  # Reset counter when stream is live
+            offline_counter[0] = 0
             return True, result.stdout.strip()
-        if "401" in result.stderr or "unauthorized" in result.stderr.lower():
-            logging.warning("Authentication error: Check cookies or credentials")
-            failure_reason = "yt-dlp (auth error)"
-        else:
-            failure_reason = "yt-dlp"
+        failure_reason = "yt-dlp"
         logging.debug(f"yt-dlp stderr: {result.stderr}")
     except subprocess.SubprocessError as e:
         failure_reason = f"yt-dlp ({str(e)})"
         logging.debug(f"yt-dlp stream check failed: {e}")
     
-    # Fallback to API
     api_url = f"https://twitcasting.tv/streamserver.php?target={streamer}&mode=client&player=pc_web"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
@@ -217,7 +199,6 @@ def is_stream_live(streamer, cookies_file, retry_delay, quality="best", offline_
         response = requests.get(api_url, headers=headers, cookies=cookies, timeout=10)
         response.raise_for_status()
         data = response.json()
-        
         logging.debug(f"API response for {streamer}: {data}")
         if not INITIAL_AUTH_LOGGED["api"]:
             logging.info("Authentication successful: Valid response from API")
@@ -239,27 +220,25 @@ def is_stream_live(streamer, cookies_file, retry_delay, quality="best", offline_
                 hls_url = streams.get(quality)
             
             if not isinstance(hls_url, str) or not hls_url:
-                logging.warning(f"Invalid or missing HLS URL in tc-hls.streams for quality {quality}: {hls_url}")
+                logging.warning(f"Invalid HLS URL for quality {quality}: {hls_url}")
                 return False, None
         
         if is_live and hls_url:
             logging.info(f"Stream is live via API, HLS URL: {hls_url}")
-            offline_counter[0] = 0  # Reset counter when stream is live
+            offline_counter[0] = 0
             return True, hls_url
         else:
             failure_reason = f"{failure_reason + '/' if failure_reason else ''}API"
             offline_counter[0] += 1
-            logging.info(f"Stream offline ({failure_reason}): {streamer}, retrying in {retry_delay} seconds")
+            logging.info(f"Stream offline ({failure_reason}): {streamer}, retrying in {retry_delay}s")
             return False, None
     except requests.RequestException as e:
         failure_reason = f"{failure_reason + '/' if failure_reason else ''}API ({str(e)})"
         logging.debug(f"API request failed: {e}")
-        logging.debug(f"API response: {response.text if 'response' in locals() else 'No response'}")
         offline_counter[0] += 1
-        logging.info(f"Stream offline ({failure_reason}): {streamer}, retrying in {retry_delay} seconds")
+        logging.info(f"Stream offline ({failure_reason}): {streamer}, retrying in {retry_delay}s")
         return False, None
 
-# Fetch stream metadata
 def fetch_metadata(streamer, hls_url=None):
     url = f"https://twitcasting.tv/{streamer}"
     headers = {
@@ -274,8 +253,6 @@ def fetch_metadata(streamer, hls_url=None):
         if stream_id_match:
             stream_id = next((g for g in stream_id_match.groups() if g), "unknown")
             logging.debug(f"Extracted stream_id from HLS URL: {stream_id}")
-        else:
-            logging.warning(f"Could not extract stream_id from HLS URL: {hls_url}")
     
     try:
         response = requests.get(url, headers=headers, timeout=10, cookies=parse_cookies(SCRIPT_DIR / "cookies.txt"))
@@ -294,14 +271,11 @@ def fetch_metadata(streamer, hls_url=None):
         logging.error(f"Failed to fetch metadata: {e}")
         return "Unknown Title", stream_id, ""
 
-# Download thumbnail
 def download_thumbnail(thumbnail_url, save_path):
     if not thumbnail_url:
         return False
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"
-        }
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"}
         response = requests.get(thumbnail_url, headers=headers, timeout=10)
         response.raise_for_status()
         with open(save_path, "wb") as f:
@@ -311,7 +285,6 @@ def download_thumbnail(thumbnail_url, save_path):
         logging.warning(f"Failed to download thumbnail: {e}")
         return False
 
-# Generate safe filename
 def generate_filename(title, streamer, stream_id, date):
     unsafe_chars = r'[<>:"/\\|?*]'
     title = re.sub(unsafe_chars, "_", title)
@@ -319,7 +292,6 @@ def generate_filename(title, streamer, stream_id, date):
     filename = f"{formatted_date} {title} [{streamer}] [{stream_id}]"
     return filename[:255]
 
-# Enhanced function to get unique filename with timestamp
 def get_unique_filename(base_path, ext):
     path = base_path.with_suffix(ext)
     if not path.exists():
@@ -333,7 +305,6 @@ def get_unique_filename(base_path, ext):
         counter += 1
     return new_path
 
-# Get stream duration using ffprobe
 def get_stream_duration(file_path, retries=3, delay=1):
     for attempt in range(retries):
         try:
@@ -347,18 +318,15 @@ def get_stream_duration(file_path, retries=3, delay=1):
     logging.warning(f"Failed to parse duration for {file_path} after {retries} attempts")
     return 0
 
-# Validate recorded file
 def validate_recording(file_path, min_duration=5, min_size_mb=0.1):
     try:
         if not file_path.exists():
             return False, "File does not exist"
         
-        # Check file size
         size_mb = file_path.stat().st_size / (1024 * 1024)
         if size_mb < min_size_mb:
             return False, f"File size too small: {size_mb:.2f}MB"
         
-        # Check duration
         duration = get_stream_duration(file_path)
         if duration < min_duration:
             return False, f"File duration too short: {duration}s"
@@ -367,38 +335,33 @@ def validate_recording(file_path, min_duration=5, min_size_mb=0.1):
     except Exception as e:
         return False, f"Validation error: {str(e)}"
 
-# Record stream
 def record_stream(hls_url, output_file, cookies_file, quality, streamer=None, max_retries=3, retry_delay=10):
     global PROCESS, STOP_EVENT
     logging.info(f"Recording HLS URL: {hls_url}")
     logging.info(f"Writing File {output_file.name}")
     
+    config = load_config(SCRIPT_DIR / "config.ini")
     cmd = [
         "yt-dlp",
         "--hls-use-mpegts",
+        "--hls-prefer-ffmpeg",
+        "--downloader", "ffmpeg",
+        "--no-part",
         "--xattrs",
-        "--ignore-no-formats-error",
-        "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
         "--cookies", str(cookies_file),
+        "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
         "--add-header", "Referer:https://twitcasting.tv/",
         "--add-header", "Origin:https://twitcasting.tv/",
         "-f", quality,
-        "--ffmpeg-location", shutil.which("ffmpeg"),
         "--output", str(output_file),
-        "--progress",
-        "--hls-prefer-ffmpeg",
-        "--no-part",
-        "--postprocessor-args", "-movflags frag_keyframe+empty_moov+faststart -f mp4",
         hls_url
     ]
+    if config.get("private_stream_password"):
+        cmd.extend(["--video-password", config["private_stream_password"]])
     
     retry_count = 0
     start_time = time.time()
-    last_progress = ""
-    progress_re = re.compile(r"frame=\s*\d+\s+fps=\s*[\d.]+.*size=\s*(\d+)KiB\s+time=(\d{2}):(\d{2}):(\d{2})\.\d+\s+bitrate=\s*([\d.]+)kbits/s")
-    last_size_kib = 0
-    last_update_time = start_time
-    max_stall_time = 300  # 5 minutes without progress
+    output_path = Path(output_file)
     
     while not STOP_EVENT and retry_count < max_retries:
         try:
@@ -417,53 +380,60 @@ def record_stream(hls_url, output_file, cookies_file, quality, streamer=None, ma
             PROCESS = None
             return
         
+        last_size_bytes = 0
+        last_update_time = start_time
+        print("\nRecording progress (file size monitoring):")
+        
         while PROCESS.poll() is None:
             try:
-                line = PROCESS.stderr.readline().strip()
-                if line:
-                    match = progress_re.search(line)
-                    if match:
-                        size_kib, hours, minutes, seconds, bitrate = match.groups()
-                        try:
-                            size_kib = int(size_kib)
-                            hours, minutes, seconds = int(hours), int(minutes), int(seconds)
-                            size_gb = size_kib / (1024 ** 2)
-                            duration = hours * 3600 + minutes * 60 + seconds
-                            duration_str = f"{hours:02d}h {minutes:02d}m {seconds:02d}s"
-                            bitrate_float = float(bitrate)
-                            progress = f"size {size_gb:.2f}gb @ {duration_str} {bitrate_float:.0f}kb/s"
-                            print(f"\r{progress:<{len(last_progress)}}", end="", file=sys.stdout)
-                            sys.stdout.flush()
-                            last_progress = progress
+                current_time = time.time()
+                
+                if output_path.exists():
+                    try:
+                        current_size_bytes = output_path.stat().st_size
+                        size_mb = current_size_bytes / (1024 * 1024)
+                        size_gb = current_size_bytes / (1024 ** 3)
+                        
+                        elapsed = current_time - start_time
+                        hours = int(elapsed // 3600)
+                        minutes = int((elapsed % 3600) // 60)
+                        seconds = int(elapsed % 60)
+                        duration_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+                        
+                        if current_time - last_update_time >= 1.0:  # update every ~1 second
+                            if current_size_bytes > last_size_bytes:
+                                delta_bytes = current_size_bytes - last_size_bytes
+                                delta_time = current_time - last_update_time
+                                speed_mib_s = (delta_bytes / (1024 * 1024)) / delta_time
+                                
+                                progress = (
+                                    f"Size: {size_gb:.2f} GB   "
+                                    f"Duration: {duration_str}   "
+                                    f"Speed: {speed_mib_s:.2f} MiB/s"
+                                )
+                            else:
+                                progress = f"Size: {size_gb:.2f} GB   Duration: {duration_str}   (no growth)"
                             
-                            if size_kib > last_size_kib:
-                                last_size_kib = size_kib
-                                last_update_time = time.time()
-                            elif time.time() - last_update_time > max_stall_time:
-                                logging.warning("Recording stalled, restarting...")
-                                PROCESS.terminate()
-                                try:
-                                    PROCESS.wait(timeout=10)
-                                except subprocess.TimeoutExpired:
-                                    PROCESS.kill()
-                                break
-                        except ValueError as e:
-                            logging.warning(f"Invalid progress data: {line}. Error: {e}")
-                            continue
-                    else:
-                        logging.debug(f"yt-dlp output: {line}")
+                            print(f"\r{progress:<80}", end="", flush=True)
+                            last_size_bytes = current_size_bytes
+                            last_update_time = current_time
+                    except Exception:
+                        # File might be locked or not yet fully written
+                        pass
+                
                 if STOP_EVENT:
-                    logging.info("Termination signal received, stopping recording gracefully...")
+                    logging.info("Termination signal received, stopping recording...")
                     PROCESS.terminate()
                     break
-                time.sleep(0.1)
+                
+                time.sleep(0.3)  # ~3 checks per second
+                
             except Exception as e:
-                logging.error(f"Error reading process output: {e}")
+                logging.error(f"Error during progress monitoring: {e}")
                 break
         
-        end_time = time.time()
-        print(f"\r{' ' * len(last_progress)}", end="\r", file=sys.stdout)
-        sys.stdout.flush()
+        # Clear the progress line
+        print("\r" + " " * 80 + "\r", end="", flush=True)
         
         try:
             stdout, stderr = PROCESS.communicate(timeout=30)
@@ -474,7 +444,6 @@ def record_stream(hls_url, output_file, cookies_file, quality, streamer=None, ma
                 if line.strip():
                     logging.debug(f"yt-dlp stderr: {line.strip()}")
             
-            # Debug file existence and size
             if output_file.exists():
                 size_bytes = output_file.stat().st_size
                 logging.info(f"File exists after download: {output_file}, Size: {size_bytes / 1024:.2f} KiB")
@@ -482,9 +451,8 @@ def record_stream(hls_url, output_file, cookies_file, quality, streamer=None, ma
                 logging.warning(f"File does not exist after download: {output_file}")
             
             if PROCESS.returncode != 0:
-                logging.error(f"Recording failed with return code {PROCESS.returncode}: {stderr}")
+                logging.error(f"Recording failed with return code {PROCESS.returncode}")
             
-            # Validate the recording
             if output_file.exists():
                 is_valid, reason = validate_recording(output_file, min_duration=5, min_size_mb=0.1)
                 if is_valid:
@@ -492,7 +460,7 @@ def record_stream(hls_url, output_file, cookies_file, quality, streamer=None, ma
                     size_gib = size_bytes / (1024 ** 3)
                     duration = get_stream_duration(output_file)
                     if duration == 0:
-                        duration = int(end_time - start_time)
+                        duration = int(time.time() - start_time)
                         logging.debug(f"Using elapsed time as duration: {duration} seconds")
                     duration_str = f"{duration//3600:02d}h {(duration%3600)//60:02d}m {duration%60:02d}s"
                     speed_kib_s = (size_bytes / 1024) / duration if duration > 0 else 0
@@ -505,7 +473,6 @@ def record_stream(hls_url, output_file, cookies_file, quality, streamer=None, ma
                     retry_count += 1
                     if retry_count < max_retries and not STOP_EVENT:
                         logging.info(f"Retrying recording ({retry_count}/{max_retries})...")
-                        # Check if stream is still live
                         if streamer:
                             is_live, new_hls_url = is_stream_live(streamer, cookies_file, retry_delay, quality)
                             if not is_live:
@@ -513,7 +480,7 @@ def record_stream(hls_url, output_file, cookies_file, quality, streamer=None, ma
                                 break
                             hls_url = new_hls_url
                         time.sleep(retry_delay)
-                        output_file = get_unique_filename(output_file.with_suffix(''), ".mp4")
+                        output_file = get_unique_filename(output_file.with_suffix(''), ".ts")
                         logging.info(f"New output file: {output_file}")
                         continue
             else:
@@ -521,7 +488,6 @@ def record_stream(hls_url, output_file, cookies_file, quality, streamer=None, ma
                 retry_count += 1
                 if retry_count < max_retries and not STOP_EVENT:
                     logging.info(f"Retrying recording ({retry_count}/{max_retries})...")
-                    # Check if stream is still live
                     if streamer:
                         is_live, new_hls_url = is_stream_live(streamer, cookies_file, retry_delay, quality)
                         if not is_live:
@@ -529,7 +495,7 @@ def record_stream(hls_url, output_file, cookies_file, quality, streamer=None, ma
                             break
                         hls_url = new_hls_url
                     time.sleep(retry_delay)
-                    output_file = get_unique_filename(output_file.with_suffix(''), ".mp4")
+                    output_file = get_unique_filename(output_file.with_suffix(''), ".ts")
                     logging.info(f"New output file: {output_file}")
                     continue
         except subprocess.TimeoutExpired:
@@ -545,7 +511,6 @@ def record_stream(hls_url, output_file, cookies_file, quality, streamer=None, ma
     if retry_count >= max_retries:
         logging.error(f"Max retries ({max_retries}) reached, giving up on recording.")
 
-# Signal handler
 def signal_handler(sig, frame):
     global STOP_EVENT, PROCESS
     if STOP_EVENT:
@@ -553,7 +518,6 @@ def signal_handler(sig, frame):
     STOP_EVENT = True
     logging.info("Termination signal received. Waiting for recording to complete...")
 
-# Main function
 def main():
     global args, STOP_EVENT, PROCESS
     args = parse_args()
@@ -570,7 +534,6 @@ def main():
         logging.error("Cookies file not found: cookies.txt")
         sys.exit(1)
     
-    # Check authentication at startup
     cookies = parse_cookies(cookies_file)
     
     sanitized_streamer = sanitize_filename(streamer) if streamer else None
@@ -584,11 +547,11 @@ def main():
         logging.info("Recording direct HLS URL")
         date = datetime.now().strftime("%Y-%m-%d")
         filename = f"{datetime.strptime(date, '%Y-%m-%d').strftime('[%Y%m%d]')}_Direct_Recording"
-        mp4_file = get_unique_filename(save_folder / filename, ".mp4")
-        logging.info(f"Writing file {mp4_file.name}")
-        record_stream(args.hls_url, mp4_file, cookies_file, args.quality, streamer=streamer)
-        if mp4_file.exists():
-            logging.info(f"File saved as: {mp4_file}")
+        ts_file = get_unique_filename(save_folder / filename, ".ts")
+        logging.info(f"Writing file {ts_file.name}")
+        record_stream(args.hls_url, ts_file, cookies_file, args.quality, streamer=streamer)
+        if ts_file.exists():
+            logging.info(f"File saved as: {ts_file}")
         if STOP_EVENT and not args.fast_exit:
             logging.info("Waiting for recording cleanup before exit...")
             time.sleep(2)
@@ -604,27 +567,26 @@ def main():
             date = datetime.now().strftime("%Y-%m-%d")
             filename = generate_filename(title, streamer, stream_id, date)
             
-            mp4_file = get_unique_filename(save_folder / filename, ".mp4")
-            thumbnail_file = mp4_file.with_suffix(".jpg") if thumbnail_url else None
+            ts_file = get_unique_filename(save_folder / filename, ".ts")
+            thumbnail_file = ts_file.with_suffix(".jpg") if thumbnail_url else None
             
             if thumbnail_url:
                 download_thumbnail(thumbnail_url, thumbnail_file)
             
-            record_stream(hls_url, mp4_file, cookies_file, args.quality, streamer=streamer)
+            record_stream(hls_url, ts_file, cookies_file, args.quality, streamer=streamer)
             
-            if mp4_file.exists():
-                size_bytes = mp4_file.stat().st_size
-                duration = get_stream_duration(mp4_file)
-                logging.info(f"Recording saved: {mp4_file} ({size_bytes / 1024:.2f} KB, {duration}s)")
+            if ts_file.exists():
+                size_bytes = ts_file.stat().st_size
+                duration = get_stream_duration(ts_file)
+                logging.info(f"Recording saved: {ts_file} ({size_bytes / 1024:.2f} KB, {duration}s)")
             else:
-                logging.warning(f"Recording file missing: {mp4_file}")
+                logging.warning(f"Recording file missing: {ts_file}")
             
             logging.info("Waiting before next stream check...")
             time.sleep(check_interval)
         else:
             time.sleep(check_interval)
         
-        # If termination signal was received, break the loop after current recording
         if STOP_EVENT:
             logging.info("Exiting main loop after recording completion...")
             if PROCESS and not args.fast_exit:
