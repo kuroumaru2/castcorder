@@ -1,4 +1,4 @@
-## CastCorder - TwitCasting Stream Recorder
+## Castcorder - TwitCasting Stream Recorder
 
 A Python script to record live streams from TwitCasting, with support for automatic stream detection, HLS recording, and thumbnail downloading. This script monitors a specified TwitCasting streamer's channel, detects when the stream goes live, and records it to a local file in .ts format. It uses `yt-dlp`, and  `ffmpeg`, for stream fetching, processing, with robust error handling and logging.
 
