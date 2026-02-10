@@ -71,7 +71,8 @@ yt-dlp: winget install yt-dlp or download from https://github.com/yt-dlp/yt-dlp/
          venv\Scripts\activate       
 4. Install Python dependencies
 
-         pip install requests beautifulsoup4
+        pip install requests beautifulsoup4
+   
 ## Usage
 Run the script from the command line/terminal with optional arguments to customize its behavior.
 Basic Command
